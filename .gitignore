@@ -1,0 +1,23 @@
+# Build artifacts & keypairs (NEVER commit private keys)
+target/
+**/target/
+.anchor/
+test-ledger/
+*.json.bak
+keypairs/
+*-keypair.json
+.env
+.env.local
+.env.*.local
+
+# Node / Next.js
+node_modules/
+**/node_modules/
+app/.next/
+app/out/
+.vercel/
+*.tsbuildinfo
+
+# Logs & OS
+*.log
+.DS_Store
