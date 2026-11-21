@@ -238,10 +238,28 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      await l1Connection.confirmTransaction(
-        { signature, blockhash, lastValidBlockHeight },
-        "confirmed"
-      );
+      const deadline = Date.now() + 60_000;
+      let confirmed = false;
+      while (Date.now() < deadline) {
+        const res = await l1Connection.getSignatureStatuses([signature]);
+        const st = res.value[0];
+        if (st) {
+          if (st.err) {
+            throw new Error(`Solana L1 transaction failed: ${JSON.stringify(st.err)}`);
+          }
+          if (
+            st.confirmationStatus === "confirmed" ||
+            st.confirmationStatus === "finalized"
+          ) {
+            confirmed = true;
+            break;
+          }
+        }
+        await new Promise((r) => setTimeout(r, 700));
+      }
+      if (!confirmed) {
+        throw new Error(`Timed out confirming L1 transaction ${signature}`);
+      }
       refreshBalance();
       return signature;
     },

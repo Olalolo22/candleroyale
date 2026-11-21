@@ -6,7 +6,6 @@ import {
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
-  sendAndConfirmTransaction,
   SystemProgram,
   Transaction,
 } from "@solana/web3.js";
@@ -45,24 +44,72 @@ function loadWallet(): Keypair {
   return Keypair.fromSecretKey(Uint8Array.from(raw));
 }
 
+async function confirmHttp(
+  conn: Connection,
+  sig: string,
+  pollMs: number,
+  timeoutMs: number
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const res = await conn.getSignatureStatuses([sig]);
+    const st = res.value[0];
+    if (st) {
+      if (st.err) {
+        const txDetails = await conn
+          .getTransaction(sig, {
+            commitment: "confirmed",
+            maxSupportedTransactionVersion: 0,
+          })
+          .catch(() => null);
+        const logs = txDetails?.meta?.logMessages?.join("\n  ") ?? "";
+        throw new Error(
+          `Tx ${sig} failed: ${JSON.stringify(st.err)}${logs ? `\nLogs:\n  ${logs}` : ""}`
+        );
+      }
+      if (
+        st.confirmationStatus === "confirmed" ||
+        st.confirmationStatus === "finalized"
+      ) {
+        return;
+      }
+    }
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  throw new Error(`Timed out confirming tx ${sig}`);
+}
+
+async function sendL1Tx(
+  l1Conn: Connection,
+  tx: Transaction,
+  signers: Keypair[]
+): Promise<string> {
+  const { blockhash } = await l1Conn.getLatestBlockhash("confirmed");
+  tx.recentBlockhash = blockhash;
+  tx.feePayer = signers[0].publicKey;
+  tx.sign(...signers);
+  const sig = await l1Conn.sendRawTransaction(tx.serialize(), {
+    skipPreflight: false,
+    preflightCommitment: "confirmed",
+  });
+  await confirmHttp(l1Conn, sig, 600, 45_000);
+  return sig;
+}
+
 async function sendErTx(
   erConn: Connection,
   tx: Transaction,
   signers: Keypair[]
 ): Promise<{ sig: string; ms: number }> {
+  const { blockhash } = await erConn.getLatestBlockhash("confirmed");
   const t0 = Date.now();
-  const { blockhash, lastValidBlockHeight } =
-    await erConn.getLatestBlockhash("confirmed");
   tx.recentBlockhash = blockhash;
   tx.feePayer = signers[0].publicKey;
   tx.sign(...signers);
   const sig = await erConn.sendRawTransaction(tx.serialize(), {
     skipPreflight: true,
   });
-  await erConn.confirmTransaction(
-    { signature: sig, blockhash, lastValidBlockHeight },
-    "confirmed"
-  );
+  await confirmHttp(erConn, sig, 30, 20_000);
   return { sig, ms: Date.now() - t0 };
 }
 
@@ -93,8 +140,12 @@ async function main() {
   const balA = await l1.getBalance(playerA.publicKey);
   console.log(`Program ID: ${CANDLEROYALE_PROGRAM_ID.toBase58()}`);
   console.log(`L1 RPC:     ${SOLANA_L1_RPC}`);
-  console.log(`ER RPC:     ${ER_RPC_URL} (validator ${ER_VALIDATOR_PUBKEY.toBase58()})`);
-  console.log(`Player A:   ${playerA.publicKey.toBase58()} (${(balA / LAMPORTS_PER_SOL).toFixed(4)} SOL)`);
+  console.log(
+    `ER RPC:     ${ER_RPC_URL} (validator ${ER_VALIDATOR_PUBKEY.toBase58()})`
+  );
+  console.log(
+    `Player A:   ${playerA.publicKey.toBase58()} (${(balA / LAMPORTS_PER_SOL).toFixed(4)} SOL)`
+  );
   console.log(`Player B:   ${playerB.publicKey.toBase58()}`);
   console.log(`Session A:  ${sessionA.publicKey.toBase58()} (ephemeral, 0 SOL)`);
   console.log(`Session B:  ${sessionB.publicKey.toBase58()} (ephemeral, 0 SOL)`);
@@ -107,14 +158,18 @@ async function main() {
 
   // Fund Player B with 0.03 SOL for entry_fee (0.01) + tx fees
   console.log("\n[1/8] Funding Player B on Devnet L1...");
-  const fundTx = new Transaction().add(
-    SystemProgram.transfer({
-      fromPubkey: playerA.publicKey,
-      toPubkey: playerB.publicKey,
-      lamports: 30_000_000,
-    })
+  const fundSig = await sendL1Tx(
+    l1,
+    new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: playerA.publicKey,
+        toPubkey: playerB.publicKey,
+        lamports: 30_000_000,
+      })
+    ),
+    [playerA]
   );
-  await sendAndConfirmTransaction(l1, fundTx, [playerA]);
+  console.log(`  fund B tx:      https://explorer.solana.com/tx/${fundSig}?cluster=devnet`);
 
   const roomId = BigInt(Date.now());
   const entryFee = 10_000_000n; // 0.01 SOL
@@ -123,8 +178,10 @@ async function main() {
   const [vaultPda] = findVaultPda(roomId);
   const [arenaPda] = findArenaPda(roomId);
 
-  console.log(`\n[2/8] L1 create_room (roomId=${roomId}, pot=0.01 SOL, SOL/USD)...`);
-  const createSig = await sendAndConfirmTransaction(
+  console.log(
+    `\n[2/8] L1 create_room (roomId=${roomId}, pot=0.01 SOL, SOL/USD)...`
+  );
+  const createSig = await sendL1Tx(
     l1,
     new Transaction().add(
       buildCreateRoomIx({
@@ -139,10 +196,14 @@ async function main() {
     ),
     [playerA]
   );
-  console.log(`  create_room tx: https://explorer.solana.com/tx/${createSig}?cluster=devnet`);
+  console.log(
+    `  create_room tx: https://explorer.solana.com/tx/${createSig}?cluster=devnet`
+  );
 
-  console.log("\n[3/8] L1 join_room (Player B escrows 0.01 SOL -> 0.02 SOL pot)...");
-  const joinSig = await sendAndConfirmTransaction(
+  console.log(
+    "\n[3/8] L1 join_room (Player B escrows 0.01 SOL -> 0.02 SOL pot)..."
+  );
+  const joinSig = await sendL1Tx(
     l1,
     new Transaction().add(
       buildJoinRoomIx({
@@ -153,10 +214,12 @@ async function main() {
     ),
     [playerB]
   );
-  console.log(`  join_room tx:   https://explorer.solana.com/tx/${joinSig}?cluster=devnet`);
+  console.log(
+    `  join_room tx:   https://explorer.solana.com/tx/${joinSig}?cluster=devnet`
+  );
 
   console.log("\n[4/8] L1 start_and_delegate (Arena PDA -> MagicBlock ER)...");
-  const delSig = await sendAndConfirmTransaction(
+  const delSig = await sendL1Tx(
     l1,
     new Transaction().add(
       buildStartAndDelegateIx({
@@ -167,14 +230,18 @@ async function main() {
     ),
     [playerA]
   );
-  console.log(`  delegate tx:    https://explorer.solana.com/tx/${delSig}?cluster=devnet`);
+  console.log(
+    `  delegate tx:    https://explorer.solana.com/tx/${delSig}?cluster=devnet`
+  );
 
   const delegated = await waitForOwner(l1, arenaPda, DELEGATION_PROGRAM_ID, 30);
   if (!delegated) throw new Error("Arena PDA did not delegate to DLP in time");
   console.log("  Confirmed on L1: Arena owner == DELEGATION_PROGRAM_ID");
   await new Promise((r) => setTimeout(r, 2500));
 
-  console.log("\n[5/8] ER begin_round (signed by ephemeral Session Key A, 0 wallet popups, 0 gas)...");
+  console.log(
+    "\n[5/8] ER begin_round (signed by ephemeral Session Key A, 0 wallet popups, 0 gas)..."
+  );
   const beginRes = await sendErTx(
     er,
     new Transaction().add(
@@ -188,8 +255,15 @@ async function main() {
   );
   console.log(`  begin_round ER tx (${beginRes.ms}ms): ${beginRes.sig}`);
 
-  console.log("\n[6/8] ER gasless Session-Key trading sprint (LONG / SHORT / FLAT on live Pyth Lazer)...");
-  const moves: Array<{ label: string; signer: Keypair; pos: -1 | 0 | 1; waitMs: number }> = [
+  console.log(
+    "\n[6/8] ER gasless Session-Key trading sprint (LONG / SHORT / FLAT on live Pyth Lazer)..."
+  );
+  const moves: Array<{
+    label: string;
+    signer: Keypair;
+    pos: -1 | 0 | 1;
+    waitMs: number;
+  }> = [
     { label: "A -> LONG ", signer: sessionA, pos: POS_LONG, waitMs: 3000 },
     { label: "B -> SHORT", signer: sessionB, pos: POS_SHORT, waitMs: 4000 },
     { label: "A -> SHORT", signer: sessionA, pos: POS_SHORT, waitMs: 4000 },
@@ -213,7 +287,7 @@ async function main() {
     const feedInfo = await er.getAccountInfo(priceFeed);
     const tick = feedInfo ? decodeOracleTick(feedInfo.data) : null;
     console.log(
-      `  tap ${m.label} | ${String(res.ms).padStart(4)}ms | SOL=$${tick ? tick.priceUsd.toFixed(4) : "?"} | sig=${res.sig.slice(0, 18)}...`
+      `  tap ${m.label} | ${String(res.ms).padStart(4)}ms | SOL=$${tick ? tick.priceUsd.toFixed(4) : "?"} | sig=${res.sig}`
     );
     await new Promise((r) => setTimeout(r, m.waitMs));
   }
@@ -224,28 +298,40 @@ async function main() {
     const arenaState = decodeArena(erArenaInfo.data);
     const remainingMs = Number(arenaState.endsAt) * 1000 - Date.now() + 2500;
     if (remainingMs > 0) {
-      console.log(`  Waiting ${(remainingMs / 1000).toFixed(1)}s for round timer expiry...`);
+      console.log(
+        `  Waiting ${(remainingMs / 1000).toFixed(1)}s for round timer expiry...`
+      );
       await new Promise((r) => setTimeout(r, remainingMs));
     }
   }
 
-  console.log("\n[7/8] ER finish_round (close all positions, crown winner, commit & undelegate to L1)...");
+  console.log(
+    "\n[7/8] ER finish_round (close all positions, crown winner, commit & undelegate to L1)..."
+  );
   const finishRes = await sendErTx(
     er,
     new Transaction().add(
       buildFinishRoundIx({
-        payer: playerA.publicKey,
+        payer: sessionA.publicKey,
         roomId,
         priceFeed,
       })
     ),
-    [playerA]
+    [sessionA]
   );
   console.log(`  finish_round ER tx (${finishRes.ms}ms): ${finishRes.sig}`);
 
-  console.log("  Waiting for MagicBlock ER commit & ownership return on Solana L1...");
-  const returned = await waitForOwner(l1, arenaPda, CANDLEROYALE_PROGRAM_ID, 45);
-  if (!returned) throw new Error("Arena ownership did not return to program on L1");
+  console.log(
+    "  Waiting for MagicBlock ER commit & ownership return on Solana L1..."
+  );
+  const returned = await waitForOwner(
+    l1,
+    arenaPda,
+    CANDLEROYALE_PROGRAM_ID,
+    45
+  );
+  if (!returned)
+    throw new Error("Arena ownership did not return to program on L1");
 
   const finalArenaInfo = await l1.getAccountInfo(arenaPda, "confirmed");
   if (!finalArenaInfo) throw new Error("Arena account missing on L1");
@@ -260,9 +346,11 @@ async function main() {
     );
   });
 
-  console.log("\n[8/8] L1 claim_payout (releasing 0.02 SOL pot from L1 Vault to winner wallet)...");
+  console.log(
+    "\n[8/8] L1 claim_payout (releasing 0.02 SOL pot from L1 Vault to winner wallet)..."
+  );
   const preWinnerBal = await l1.getBalance(winnerSeat.wallet);
-  const claimSig = await sendAndConfirmTransaction(
+  const claimSig = await sendL1Tx(
     l1,
     new Transaction().add(
       buildClaimPayoutIx({
@@ -277,7 +365,15 @@ async function main() {
   const vaultInfo = await l1.getAccountInfo(vaultPda, "confirmed");
   const vault = vaultInfo ? decodeVault(vaultInfo.data) : null;
 
-  console.log(`  claim_payout tx: https://explorer.solana.com/tx/${claimSig}?cluster=devnet`);
+  console.log(
+    `  claim_payout tx: https://explorer.solana.com/tx/${claimSig}?cluster=devnet`
+  );
+  console.log(
+    `  Vault PDA:       https://explorer.solana.com/address/${vaultPda.toBase58()}?cluster=devnet`
+  );
+  console.log(
+    `  Arena PDA:       https://explorer.solana.com/address/${arenaPda.toBase58()}?cluster=devnet`
+  );
   console.log(
     `  Winner balance delta: +${((postWinnerBal - preWinnerBal) / LAMPORTS_PER_SOL).toFixed(5)} SOL (vault.claimed=${vault?.claimed})`
   );

@@ -22,6 +22,7 @@ echo "==> 3. Deployer: $DEPLOYER ($BALANCE)"
 echo "==> 4. Deploying candleroyale.so to Solana Devnet..."
 solana program deploy target/deploy/candleroyale.so \
   --program-id target/deploy/candleroyale-keypair.json \
+  --use-rpc \
   --url https://api.devnet.solana.com
 
 echo "==> 5. Running live Solana Devnet <-> MagicBlock ER E2E test..."

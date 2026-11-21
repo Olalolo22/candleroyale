@@ -65,6 +65,24 @@ flowchart LR
 
 ---
 
+## Verified Live On-Chain Proof (Solana Devnet ↔ MagicBlock ER)
+
+Every step of a real 2-player SOL match was executed end-to-end via `npm run e2e:devnet` on Solana Devnet and MagicBlock US Devnet ER (`devnet-us.magicblock.app`):
+
+| Step | Layer | Signer | Proof / Latency |
+|---|---|---|---|
+| **Program Deploy** | Solana L1 | Deployer | [`3XqgNYHt...s45r9`](https://explorer.solana.com/tx/3XqgNYHtV2G9bd6pZs5zLSbH55jewtC3HECkWrgCuCTMJWZ1aAwvZdekCASCn7ymvfDPNGegZGQHtvrsrR3s45r9?cluster=devnet) (`3fgXDqKzQiQQUSfbPXnyuonqJi8BMbeGf9vnxxH9bEtN`) |
+| **`create_room`** (0.01 SOL) | Solana L1 | Player A | [`3T3BJ2ed...95KBdo`](https://explorer.solana.com/tx/3T3BJ2eddSFvg6M6gsU4wGuDQozkRtjYhoiSctHipWu7a2m9pkyGfGQXhSnAu6P4fd3oHTvqocRhqUK9KW95KBdo?cluster=devnet) |
+| **`join_room`** (0.01 SOL) | Solana L1 | Player B | [`4ycAB58X...qLsN6`](https://explorer.solana.com/tx/4ycAB58XsJNikib8oyEFfDLfhHUwrZWkNGHZiyL1i7tWJuu7GEWpBAtQ5QZ93GrNyiEXSEWnf41Fhonq1h3qLsN6?cluster=devnet) (pot = 0.02 SOL) |
+| **`start_and_delegate`** | Solana L1 → ER | Player A | [`3ZiUNs43...wiYugz`](https://explorer.solana.com/tx/3ZiUNs43KXpPDLRBjJsNx2WCnQ2FchkEff5L8s8YQmUaUW7gh9rjszQg6iFrUHu8zLfJAQkuvueD8djC3fwiYugz?cluster=devnet) (`owner == DELeGGv...`) |
+| **`begin_round`** | MagicBlock ER | 0-SOL Session Key A | `253ms` · 0 gas · `5qCNxP1cDoxEYA2DHm9jmvsNmJJRkH5g1VJDhftEvj1pw1Mv7nXcZoJsfXafMxCHvno7tfGVc91dLpsCPYe5j7Lu` |
+| **5× `tap(LONG/SHORT/FLAT)`** | MagicBlock ER | 0-SOL Session Keys A & B | `149–168ms` HTTP RTT · 0 gas · Live Pyth Lazer SOL/USD (`$70.1347 → $70.1121`) |
+| **`finish_round`** (`commit_and_undelegate`) | MagicBlock ER → L1 | 0-SOL Session Key A | `148ms` · 0 gas · `3FNzusD1Z8zjjXNeeL3GVkQNiLnTTyQxp9Z9nZMBKAz8BR4Gn1gKZFf8VnsJRhR8GRvPe9mV1gxv22q4n6XBkYJ1` |
+| **`claim_payout`** (`+0.02000 SOL`) | Solana L1 | Permissionless → Winner | [`zc3sMsGx...cCULD`](https://explorer.solana.com/tx/zc3sMsGx2CXeZGPX7wUgTh857MtyAeBXVEUu5efe8cPAWoV4k2Z7Ye7ax6NCLW8SSjt4iaQigqajqFh1C3cCULD?cluster=devnet) (Winner `+0.58%` vs `-1.06%`) |
+| **Verified Room PDAs** | Solana L1 | — | [Vault PDA (`46uQ7G...`)](https://explorer.solana.com/address/46uQ7G2qmMdYk6R4XAQkEeZaPaWjmyvxnhoJMGHMzyC8?cluster=devnet) · [Arena PDA (`8eimpF...`)](https://explorer.solana.com/address/8eimpFWPQ3oD2cBYgci7bzURmtmNyhQzdesX6PoD5kz4?cluster=devnet) |
+
+---
+
 ## Program Instructions
 
 | Instruction | Layer | Signer | Purpose |

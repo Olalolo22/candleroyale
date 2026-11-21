@@ -81,18 +81,31 @@ export async function sendErSessionTx(
     maxRetries: 2,
   });
 
-  // Confirm on ER — typically lands in 20–120ms
-  const status = await erConnection.confirmTransaction(signature, "confirmed");
-  if (status.value.err) {
-    // Bust cached blockhash on any failure
-    cachedErBlockhash = null;
-    throw new Error(`ER transaction failed: ${JSON.stringify(status.value.err)}`);
+  // Fast HTTP confirmation poll — lands in ~30-120ms without WebSocket fragility
+  const deadline = Date.now() + 12_000;
+  while (Date.now() < deadline) {
+    const res = await erConnection.getSignatureStatuses([signature]);
+    const st = res.value[0];
+    if (st) {
+      if (st.err) {
+        cachedErBlockhash = null;
+        throw new Error(`ER transaction failed: ${JSON.stringify(st.err)}`);
+      }
+      if (
+        st.confirmationStatus === "confirmed" ||
+        st.confirmationStatus === "finalized"
+      ) {
+        return {
+          signature,
+          latencyMs: Math.max(1, Math.round(performance.now() - t0)),
+        };
+      }
+    }
+    await new Promise((r) => setTimeout(r, 35));
   }
 
-  return {
-    signature,
-    latencyMs: Math.max(1, Math.round(performance.now() - t0)),
-  };
+  cachedErBlockhash = null;
+  throw new Error(`ER confirmation timed out for ${signature}`);
 }
 
 export function createErConnection(): Connection {
