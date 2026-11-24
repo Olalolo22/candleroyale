@@ -55,10 +55,10 @@ export function CandleCanvas({
       ctx.scale(dpr, dpr);
 
       // Clear background
-      ctx.fillStyle = "#0C0F14";
+      ctx.fillStyle = "#0B1426";
       ctx.fillRect(0, 0, width, height);
 
-      const padTop = 64;
+      const padTop = 76;
       const padBottom = 26;
       const padLeft = 14;
       const padRight = 84;
@@ -66,11 +66,11 @@ export function CandleCanvas({
       const plotH = height - padTop - padBottom;
 
       if (candles.length === 0 || livePriceUsd === null) {
-        ctx.fillStyle = "#5D6676";
-        ctx.font = '500 13px "JetBrains Mono", monospace';
+        ctx.fillStyle = "#8C9AB8";
+        ctx.font = '500 14px "Archivo", sans-serif';
         ctx.textAlign = "center";
         ctx.fillText(
-          "Subscribing to live MagicBlock Pyth Lazer ER stream…",
+          "Waiting for the first live price…",
           width / 2,
           height / 2
         );
@@ -103,10 +103,10 @@ export function CandleCanvas({
         padTop + ((hi - p) / (hi - lo)) * plotH;
 
       // Subtle horizontal reference guides (4 levels)
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+      ctx.strokeStyle = "rgba(140, 154, 184, 0.10)";
       ctx.lineWidth = 1;
-      ctx.font = '500 11px "JetBrains Mono", monospace';
-      ctx.fillStyle = "#5D6676";
+      ctx.font = '500 11px "Archivo", sans-serif';
+      ctx.fillStyle = "#5F6D8C";
       ctx.textAlign = "left";
 
       const decimals = livePriceUsd > 1000 ? 2 : 4;
@@ -133,7 +133,7 @@ export function CandleCanvas({
         const yHigh = priceToY(c.high);
         const yLow = priceToY(c.low);
         const bullish = c.close >= c.open;
-        const color = bullish ? "#00D084" : "#FF4557";
+        const color = bullish ? "#2BD67B" : "#FF5A4E";
 
         // Wick
         ctx.strokeStyle = color;
@@ -165,7 +165,7 @@ export function CandleCanvas({
 
         ctx.save();
         if (m.position === POS_LONG) {
-          ctx.fillStyle = "#00D084";
+          ctx.fillStyle = "#2BD67B";
           ctx.beginPath();
           ctx.moveTo(mx, my - 7);
           ctx.lineTo(mx - 5, my + 3);
@@ -173,7 +173,7 @@ export function CandleCanvas({
           ctx.closePath();
           ctx.fill();
         } else if (m.position === POS_SHORT) {
-          ctx.fillStyle = "#FF4557";
+          ctx.fillStyle = "#FF5A4E";
           ctx.beginPath();
           ctx.moveTo(mx, my + 7);
           ctx.lineTo(mx - 5, my - 3);
@@ -181,7 +181,7 @@ export function CandleCanvas({
           ctx.closePath();
           ctx.fill();
         } else {
-          ctx.fillStyle = "#94A3B8";
+          ctx.fillStyle = "#B4BDD1";
           ctx.beginPath();
           ctx.arc(mx, my, 3.5, 0, Math.PI * 2);
           ctx.fill();
@@ -192,7 +192,7 @@ export function CandleCanvas({
       // Draw Entry Price line if in LONG or SHORT
       if (entryPriceUsd && entryPriceUsd > 0 && position !== 0) {
         const ey = Math.round(priceToY(entryPriceUsd)) + 0.5;
-        const entryColor = position === POS_LONG ? "#00D084" : "#FF4557";
+        const entryColor = position === POS_LONG ? "#2BD67B" : "#FF5A4E";
 
         ctx.save();
         ctx.strokeStyle = entryColor;
@@ -207,8 +207,8 @@ export function CandleCanvas({
         // Entry tag on right axis
         ctx.fillStyle = entryColor;
         ctx.fillRect(width - padRight + 4, ey - 9, padRight - 8, 18);
-        ctx.fillStyle = position === POS_LONG ? "#032619" : "#2B060B";
-        ctx.font = '700 10px "JetBrains Mono", monospace';
+        ctx.fillStyle = position === POS_LONG ? "#03210F" : "#2E0603";
+        ctx.font = '700 10px "Archivo", sans-serif';
         ctx.fillText(
           entryPriceUsd.toFixed(decimals),
           width - padRight + 9,
@@ -220,7 +220,7 @@ export function CandleCanvas({
       // Draw Live Price hairline + pill
       const ly = Math.round(priceToY(livePriceUsd)) + 0.5;
       ctx.save();
-      ctx.strokeStyle = "rgba(245, 196, 81, 0.7)";
+      ctx.strokeStyle = "rgba(255, 201, 40, 0.75)";
       ctx.lineWidth = 1;
       ctx.setLineDash([2, 3]);
       ctx.beginPath();
@@ -229,10 +229,10 @@ export function CandleCanvas({
       ctx.stroke();
       ctx.setLineDash([]);
 
-      ctx.fillStyle = "#F5C451";
+      ctx.fillStyle = "#FFC928";
       ctx.fillRect(width - padRight + 4, ly - 10, padRight - 8, 20);
-      ctx.fillStyle = "#241902";
-      ctx.font = '700 11px "JetBrains Mono", monospace';
+      ctx.fillStyle = "#2A1F00";
+      ctx.font = '700 11px "Archivo", sans-serif';
       ctx.fillText(
         livePriceUsd.toFixed(decimals),
         width - padRight + 9,
@@ -256,22 +256,21 @@ export function CandleCanvas({
       <canvas
         ref={canvasRef}
         style={{ width: "100%", height: "100%", display: "block" }}
+        role="img"
+        aria-label={
+          livePriceUsd !== null
+            ? `Live ${symbol} chart, last price $${livePriceUsd.toFixed(decimals)}`
+            : `Live ${symbol} chart, waiting for price`
+        }
       />
-      <div className="chart-overlay-price">
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <span className="live-price-big">
-            {livePriceUsd !== null ? `$${livePriceUsd.toFixed(decimals)}` : "—"}
-          </span>
-          <span
-            className="mono"
-            style={{ fontSize: 12, color: "var(--ink-secondary)" }}
-          >
-            {symbol}
-          </span>
+      <div className="chart-overlay">
+        <div className="chart-px">
+          {livePriceUsd !== null ? `$${livePriceUsd.toFixed(decimals)}` : "—"}
+          <small>{symbol}</small>
         </div>
-        <div className="live-price-sub">
-          Pyth Lazer on MagicBlock ER · 2.5s candles
-          {erRttMs !== null ? ` · ${erRttMs}ms feed` : ""}
+        <div className="chart-sub">
+          Pyth Lazer price, 2.5-second candles
+          {erRttMs !== null ? `, feed round trip ${erRttMs}ms` : ""}
         </div>
       </div>
     </div>

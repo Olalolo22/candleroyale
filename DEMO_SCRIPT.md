@@ -13,21 +13,21 @@
 ## Beat-by-Beat Script (65 seconds total)
 
 ### 0:00–0:08 — Hook + L1 Custody
-* **Action (Window Left):** Click **Create Arena · Escrow 0.05 SOL** and approve Phantom once.
+* **Action (Window Left):** Click **Create room and stake 0.05 SOL** and approve Phantom once.
 * **Voiceover:** *"CandleRoyale is a 60-second PvP micro-trading battle on Solana. Players escrow real SOL into a Solana L1 vault, bind a scoped Session Key in one signature, and battle at 20x leverage on live Pyth Lazer feeds."*
 
 ### 0:08–0:18 — Player B Joins + MagicBlock Delegation
-* **Action (Window Right):** Refresh Open Arenas -> click **Enter** -> click **Join Arena (0.05 SOL)** (pot jumps to `0.100 SOL`).
-* **Action (Window Left):** Click **Start & Delegate to MagicBlock ER**. Watch the badge flip from `L1 LOBBY` -> `ER LIVE`.
+* **Action (Window Right):** In **Rooms** (Open tab) click **Join** -> click **Join for 0.05 SOL** (pot jumps to `0.1 SOL`).
+* **Action (Window Left):** Click **Start room**. Watch the phase rail move from `Fill seats` -> `Ready`.
 * **Voiceover:** *"The SOL vault never leaves Solana L1. Only the Arena PDA delegates into MagicBlock's Ephemeral Rollup so every trade runs gasless at sub-50ms speed."*
 
 ### 0:18–0:44 — Uncut Rapid-Fire PvP Sprint (0 Popups, 0 Gas)
-* **Action (Both Windows):** Rapidly tap **LONG (`W`)**, **SHORT (`S`)**, and **FLAT (`Space`)** in both windows as the live Pyth Lazer SOL/USD candles move. Point cursor at the **Execution Tape** showing real ER signatures landing in ~30–90ms with `0 SOL` gas and zero wallet popups.
+* **Action (Both Windows):** Rapidly tap **LONG (`W`)**, **SHORT (`S`)**, and **FLAT (`Space`)** in both windows as the live Pyth Lazer SOL/USD candles move. Point cursor at the **On-chain log** showing real ER signatures landing in ~30–90ms with `0 SOL` gas and zero wallet popups.
 * **Voiceover:** *"Notice zero Phantom popups and zero gas fees — every single tap is a real on-chain MagicBlock ER transaction signed by each player's ephemeral Session Key and marked to market against MagicBlock's live Pyth Lazer SOL feed. Impossible on 400ms L1."*
 
 ### 0:44–0:58 — Commit & Undelegate + L1 Payout Proof
-* **Action (When clock hits 0.0s):** Click **Finish & Commit to L1**. Watch ownership return to L1 and the **Verified Solana L1 Winner** banner appear.
-* **Action:** Click **Claim 0.100 SOL on Solana L1** and click the clickable **Solana Explorer** tx link in the Execution Tape.
+* **Action (When clock hits 0.0s):** Click **Settle the room**. Watch ownership return to L1 and the winner reveal appear.
+* **Action:** Click **Claim 0.1 SOL** and click the **Solana Explorer** tx link in the On-chain log.
 * **Voiceover:** *"When the timer hits zero, MagicBlock commits the final PnL and undelegates the Arena back to Solana L1 — unlocking the L1 Vault to pay the full 0.10 SOL pot straight to the winner's wallet, verifiable on Solana Explorer."*
 
 ### 0:58–1:05 — Close
