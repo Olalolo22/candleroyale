@@ -4,6 +4,7 @@ import {
   TransactionInstruction,
 } from "@solana/web3.js";
 import {
+  ARENA_ACCOUNT_SIZE,
   ARENA_LEVERAGE,
   ARENA_SEED,
   CANDLEROYALE_PROGRAM_ID,
@@ -18,6 +19,7 @@ import {
   PNL_SCALE,
   POS_FLAT,
   PositionDir,
+  VAULT_ACCOUNT_SIZE,
   VAULT_SEED,
 } from "./constants";
 
@@ -30,6 +32,7 @@ export const DISCRIMINATORS = {
   begin_round: new Uint8Array([209, 88, 27, 188, 15, 243, 202, 186]),
   tap: new Uint8Array([31, 254, 225, 122, 3, 186, 67, 245]),
   finish_round: new Uint8Array([23, 104, 163, 186, 110, 225, 11, 242]),
+  abort_stale_room: new Uint8Array([48, 114, 196, 20, 83, 157, 76, 137]),
   claim_payout: new Uint8Array([127, 240, 132, 62, 227, 198, 146, 133]),
   account_Vault: new Uint8Array([211, 8, 232, 43, 2, 152, 117, 119]),
   account_Arena: new Uint8Array([243, 215, 44, 44, 231, 211, 232, 168]),
@@ -39,7 +42,7 @@ export const PRICE_UPDATE_V2_DISCRIMINATOR = new Uint8Array([
   0xea, 0xa1, 0x0e, 0x24, 0xac, 0xef, 0x0f, 0xe8,
 ]);
 
-export type ArenaStatus = "Lobby" | "Live" | "Finished";
+export type ArenaStatus = "Lobby" | "Live" | "Finished" | "Aborted";
 
 export interface VaultAccount {
   roomId: bigint;
@@ -48,6 +51,7 @@ export interface VaultAccount {
   totalPot: bigint;
   claimed: boolean;
   cancelled: boolean;
+  claimedMask: number;
   bump: number;
 }
 
@@ -69,12 +73,14 @@ export interface ArenaAccount {
   durationSecs: bigint;
   maxPlayers: number;
   status: ArenaStatus;
+  createdAt: bigint;
   startedAt: bigint;
   endsAt: bigint;
   startPrice: bigint;
   lastPrice: bigint;
   playerCount: number;
   winnerIndex: number;
+  winnerMask: number;
   players: PlayerSeat[];
   bump: number;
 }
@@ -86,7 +92,7 @@ export interface OracleTick {
   postedSlot: bigint;
 }
 
-// ─── Binary helpers (browser-safe, zero Buffer dependency) ───────────────────
+// ─── Binary helpers (browser-safe) ──────────────────────────────────────────
 
 export function u64ToLeBytes(value: bigint | number): Uint8Array {
   const out = new Uint8Array(8);
@@ -157,7 +163,10 @@ export function findDelegationPdas(
 // ─── Account Decoders (100% byte-exact with Rust state.rs & oracle.rs) ───────
 
 export function decodeVault(raw: Uint8Array): VaultAccount {
-  if (raw.length < 67 || !bytesEqual(raw.subarray(0, 8), DISCRIMINATORS.account_Vault)) {
+  if (
+    raw.length < VAULT_ACCOUNT_SIZE ||
+    !bytesEqual(raw.subarray(0, 8), DISCRIMINATORS.account_Vault)
+  ) {
     throw new Error("Invalid Vault account data or discriminator");
   }
   const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
@@ -172,12 +181,25 @@ export function decodeVault(raw: Uint8Array): VaultAccount {
   o += 8;
   const claimed = raw[o++] === 1;
   const cancelled = raw[o++] === 1;
+  const claimedMask = raw[o++];
   const bump = raw[o++];
-  return { roomId, creator, entryFee, totalPot, claimed, cancelled, bump };
+  return {
+    roomId,
+    creator,
+    entryFee,
+    totalPot,
+    claimed,
+    cancelled,
+    claimedMask,
+    bump,
+  };
 }
 
 export function decodeArena(raw: Uint8Array): ArenaAccount {
-  if (raw.length < 691 || !bytesEqual(raw.subarray(0, 8), DISCRIMINATORS.account_Arena)) {
+  if (
+    raw.length < ARENA_ACCOUNT_SIZE ||
+    !bytesEqual(raw.subarray(0, 8), DISCRIMINATORS.account_Arena)
+  ) {
     throw new Error("Invalid Arena account data or discriminator");
   }
   const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
@@ -195,7 +217,15 @@ export function decodeArena(raw: Uint8Array): ArenaAccount {
   const maxPlayers = raw[o++];
   const statusByte = raw[o++];
   const status: ArenaStatus =
-    statusByte === 0 ? "Lobby" : statusByte === 1 ? "Live" : "Finished";
+    statusByte === 0
+      ? "Lobby"
+      : statusByte === 1
+        ? "Live"
+        : statusByte === 2
+          ? "Finished"
+          : "Aborted";
+  const createdAt = view.getBigInt64(o, true);
+  o += 8;
   const startedAt = view.getBigInt64(o, true);
   o += 8;
   const endsAt = view.getBigInt64(o, true);
@@ -206,6 +236,7 @@ export function decodeArena(raw: Uint8Array): ArenaAccount {
   o += 8;
   const playerCount = raw[o++];
   const winnerIndex = raw[o++];
+  const winnerMask = raw[o++];
 
   const players: PlayerSeat[] = [];
   for (let i = 0; i < MAX_PLAYERS; i++) {
@@ -245,12 +276,14 @@ export function decodeArena(raw: Uint8Array): ArenaAccount {
     durationSecs,
     maxPlayers,
     status,
+    createdAt,
     startedAt,
     endsAt,
     startPrice,
     lastPrice,
     playerCount,
     winnerIndex,
+    winnerMask,
     players,
     bump,
   };
@@ -273,7 +306,7 @@ export function decodeOracleTick(raw: Uint8Array): OracleTick {
   return { rawPrice, priceUsd, publishTime, postedSlot };
 }
 
-// ─── PnL Math (exact mirror of Rust compute_pnl_delta) ──────────────────────
+// ─── PnL & Payout Helpers ───────────────────────────────────────────────────
 
 export function computeUnrealizedPnl(
   position: PositionDir,
@@ -302,6 +335,20 @@ export function formatPnlPct(pnlMicro: bigint): string {
   const pct = Number(pnlMicro) / 10_000;
   const sign = pct > 0 ? "+" : "";
   return `${sign}${pct.toFixed(2)}%`;
+}
+
+export function getWinningSeatIndices(arena: ArenaAccount): number[] {
+  const winners: number[] = [];
+  for (let i = 0; i < arena.playerCount; i++) {
+    if ((arena.winnerMask & (1 << i)) !== 0) {
+      winners.push(i);
+    }
+  }
+  return winners;
+}
+
+export function isSeatClaimed(vault: VaultAccount, seatIndex: number): boolean {
+  return (vault.claimedMask & (1 << seatIndex)) !== 0;
 }
 
 // ─── Instruction Builders ───────────────────────────────────────────────────
@@ -415,7 +462,7 @@ export function buildStartAndDelegateIx(params: {
       { pubkey: programId, isSigner: false, isWritable: false },
       { pubkey: DELEGATION_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      // Remaining account[0]: pinned MagicBlock ER validator
+      // Remaining account[0]: pinned MagicBlock ER validator (verified on-chain)
       { pubkey: validator, isSigner: false, isWritable: false },
     ],
     data: Buffer.from(
@@ -501,10 +548,35 @@ export function buildFinishRoundIx(params: {
   });
 }
 
+export function buildAbortStaleRoomIx(params: {
+  payer: PublicKey;
+  roomId: bigint;
+  programId?: PublicKey;
+}): TransactionInstruction {
+  const programId = params.programId ?? CANDLEROYALE_PROGRAM_ID;
+  const [arena] = findArenaPda(params.roomId, programId);
+
+  // Exact account order expanded by #[commit] in ephemeral-rollups-sdk 0.16.2:
+  // payer, arena, magic_program, magic_context
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: params.payer, isSigner: true, isWritable: true },
+      { pubkey: arena, isSigner: false, isWritable: true },
+      { pubkey: MAGIC_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: MAGIC_CONTEXT_ID, isSigner: false, isWritable: true },
+    ],
+    data: Buffer.from(
+      concatBytes(DISCRIMINATORS.abort_stale_room, u64ToLeBytes(params.roomId))
+    ),
+  });
+}
+
 export function buildClaimPayoutIx(params: {
   payer: PublicKey;
   roomId: bigint;
-  winner: PublicKey;
+  seatIndex: number;
+  recipient: PublicKey;
   programId?: PublicKey;
 }): TransactionInstruction {
   const programId = params.programId ?? CANDLEROYALE_PROGRAM_ID;
@@ -517,10 +589,14 @@ export function buildClaimPayoutIx(params: {
       { pubkey: params.payer, isSigner: true, isWritable: true },
       { pubkey: vault, isSigner: false, isWritable: true },
       { pubkey: arena, isSigner: false, isWritable: false },
-      { pubkey: params.winner, isSigner: false, isWritable: true },
+      { pubkey: params.recipient, isSigner: false, isWritable: true },
     ],
     data: Buffer.from(
-      concatBytes(DISCRIMINATORS.claim_payout, u64ToLeBytes(params.roomId))
+      concatBytes(
+        DISCRIMINATORS.claim_payout,
+        u64ToLeBytes(params.roomId),
+        new Uint8Array([params.seatIndex])
+      )
     ),
   });
 }

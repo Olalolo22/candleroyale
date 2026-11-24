@@ -12,7 +12,7 @@ pub enum CandleRoyaleError {
     RoomNotInLobby,
     #[msg("Room is not Live")]
     RoomNotLive,
-    #[msg("Room has not finished yet")]
+    #[msg("Room has not finished or been aborted yet")]
     RoomNotFinished,
     #[msg("Room is already full")]
     RoomFull,
@@ -34,9 +34,9 @@ pub enum CandleRoyaleError {
     OracleFeedMismatch,
     #[msg("Oracle price is non-positive or stale")]
     StaleOrInvalidPrice,
-    #[msg("Payout has already been claimed")]
+    #[msg("Payout or refund for this seat has already been claimed")]
     AlreadyClaimed,
-    #[msg("Winner account does not match winning seat wallet")]
+    #[msg("Recipient account does not match seat wallet")]
     WinnerMismatch,
     #[msg("Math overflow during PnL or payout calculation")]
     MathOverflow,
@@ -44,4 +44,14 @@ pub enum CandleRoyaleError {
     CannotCancelWithOthers,
     #[msg("Invalid arena account data")]
     InvalidArenaAccount,
+    #[msg("Validator must match the pinned MagicBlock ER validator")]
+    InvalidValidator,
+    #[msg("Position is already set to the requested direction")]
+    NoOpPositionChange,
+    #[msg("Session key cannot be default or collide with an existing wallet or session key")]
+    SessionKeyCollision,
+    #[msg("Stale lobby timeout has not elapsed yet")]
+    StaleTimeoutNotReached,
+    #[msg("Seat is not eligible for payout in this round")]
+    SeatNotWinner,
 }

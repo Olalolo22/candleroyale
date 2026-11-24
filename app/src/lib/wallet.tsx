@@ -84,6 +84,10 @@ interface WalletContextValue {
   disconnect: () => Promise<void>;
   refreshBalance: () => Promise<void>;
   sendL1Transaction: (tx: Transaction) => Promise<string>;
+  sendErWalletTransaction: (
+    erConnection: Connection,
+    tx: Transaction
+  ) => Promise<{ signature: string; latencyMs: number }>;
   burnerKeypair: Keypair | null;
 }
 
@@ -266,6 +270,69 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     [publicKey, walletKind, burnerKeypair, l1Connection, refreshBalance]
   );
 
+  const sendErWalletTransaction = useCallback(
+    async (
+      erConnection: Connection,
+      tx: Transaction
+    ): Promise<{ signature: string; latencyMs: number }> => {
+      if (!publicKey || !walletKind) {
+        throw new Error("Connect a Solana Devnet wallet first.");
+      }
+      const t0 = performance.now();
+      const { blockhash } = await erConnection.getLatestBlockhash("confirmed");
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = publicKey;
+
+      let rawTx: Buffer | Uint8Array;
+      if (walletKind === "burner") {
+        const kp = burnerKeypair ?? loadOrCreateBurner();
+        tx.sign(kp);
+        rawTx = tx.serialize();
+      } else {
+        const provider = getInjectedProvider(walletKind);
+        if (!provider) throw new Error("Wallet provider disconnected.");
+        if (typeof provider.signTransaction !== "function") {
+          throw new Error(
+            "Connected wallet does not support direct ER transaction signing."
+          );
+        }
+        const signed = await provider.signTransaction(tx);
+        rawTx = signed.serialize();
+      }
+
+      const signature = await erConnection.sendRawTransaction(rawTx, {
+        skipPreflight: true,
+        maxRetries: 2,
+      });
+
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        const res = await erConnection.getSignatureStatuses([signature]);
+        const st = res.value[0];
+        if (st) {
+          if (st.err) {
+            throw new Error(
+              `ER wallet transaction failed: ${JSON.stringify(st.err)}`
+            );
+          }
+          if (
+            st.confirmationStatus === "confirmed" ||
+            st.confirmationStatus === "finalized"
+          ) {
+            return {
+              signature,
+              latencyMs: Math.max(1, Math.round(performance.now() - t0)),
+            };
+          }
+        }
+        await new Promise((r) => setTimeout(r, 35));
+      }
+
+      throw new Error(`ER confirmation timed out for ${signature}`);
+    },
+    [publicKey, walletKind, burnerKeypair]
+  );
+
   const walletLabel =
     walletKind === "phantom"
       ? "Phantom"
@@ -293,6 +360,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         disconnect,
         refreshBalance,
         sendL1Transaction,
+        sendErWalletTransaction,
         burnerKeypair,
       }}
     >

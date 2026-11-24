@@ -10,6 +10,7 @@ import {
   Transaction,
 } from "@solana/web3.js";
 import {
+  buildAbortStaleRoomIx,
   buildBeginRoundIx,
   buildClaimPayoutIx,
   buildCreateRoomIx,
@@ -23,6 +24,7 @@ import {
   findArenaPda,
   findVaultPda,
   formatPnlPct,
+  getWinningSeatIndices,
 } from "../sdk/codec";
 import {
   CANDLEROYALE_PROGRAM_ID,
@@ -113,6 +115,17 @@ async function sendErTx(
   return { sig, ms: Date.now() - t0 };
 }
 
+async function expectFail(label: string, fn: () => Promise<unknown>) {
+  try {
+    await fn();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(`  [PASS] Security check rejected (${label}): ${msg.slice(0, 95)}`);
+    return;
+  }
+  throw new Error(`Security check FAILED — ${label} should have been rejected!`);
+}
+
 async function waitForOwner(
   conn: Connection,
   pubkey: PublicKey,
@@ -141,24 +154,21 @@ async function main() {
   console.log(`Program ID: ${CANDLEROYALE_PROGRAM_ID.toBase58()}`);
   console.log(`L1 RPC:     ${SOLANA_L1_RPC}`);
   console.log(
-    `ER RPC:     ${ER_RPC_URL} (validator ${ER_VALIDATOR_PUBKEY.toBase58()})`
+    `ER RPC:     ${ER_RPC_URL} (pinned validator ${ER_VALIDATOR_PUBKEY.toBase58()})`
   );
   console.log(
     `Player A:   ${playerA.publicKey.toBase58()} (${(balA / LAMPORTS_PER_SOL).toFixed(4)} SOL)`
   );
   console.log(`Player B:   ${playerB.publicKey.toBase58()}`);
-  console.log(`Session A:  ${sessionA.publicKey.toBase58()} (ephemeral, 0 SOL)`);
-  console.log(`Session B:  ${sessionB.publicKey.toBase58()} (ephemeral, 0 SOL)`);
 
   if (balA < 0.08 * LAMPORTS_PER_SOL) {
     throw new Error(
-      `Need at least 0.08 Devnet SOL on ${playerA.publicKey.toBase58()} to fund Player B and run E2E.`
+      `Need at least 0.08 Devnet SOL on ${playerA.publicKey.toBase58()}.`
     );
   }
 
-  // Fund Player B with 0.03 SOL for entry_fee (0.01) + tx fees
-  console.log("\n[1/8] Funding Player B on Devnet L1...");
-  const fundSig = await sendL1Tx(
+  console.log("\n[1/9] Funding Player B on Devnet L1...");
+  await sendL1Tx(
     l1,
     new Transaction().add(
       SystemProgram.transfer({
@@ -169,18 +179,15 @@ async function main() {
     ),
     [playerA]
   );
-  console.log(`  fund B tx:      https://explorer.solana.com/tx/${fundSig}?cluster=devnet`);
 
   const roomId = BigInt(Date.now());
   const entryFee = 10_000_000n; // 0.01 SOL
-  const durationSecs = 18; // Short E2E sprint
+  const durationSecs = 22;
   const priceFeed = MARKET_FEEDS.SOL.address;
   const [vaultPda] = findVaultPda(roomId);
   const [arenaPda] = findArenaPda(roomId);
 
-  console.log(
-    `\n[2/8] L1 create_room (roomId=${roomId}, pot=0.01 SOL, SOL/USD)...`
-  );
+  console.log(`\n[2/9] L1 create_room (roomId=${roomId}, pot=0.01 SOL, SOL/USD)...`);
   const createSig = await sendL1Tx(
     l1,
     new Transaction().add(
@@ -196,13 +203,24 @@ async function main() {
     ),
     [playerA]
   );
-  console.log(
-    `  create_room tx: https://explorer.solana.com/tx/${createSig}?cluster=devnet`
+  console.log(`  create_room tx: https://explorer.solana.com/tx/${createSig}?cluster=devnet`);
+
+  console.log("\n[3/9] Security Gate Checks on L1 (SessionKeyCollision + InvalidValidator)...");
+  await expectFail("join_room with colliding session_key == Player A wallet", () =>
+    sendL1Tx(
+      l1,
+      new Transaction().add(
+        buildJoinRoomIx({
+          player: playerB.publicKey,
+          roomId,
+          sessionKey: playerA.publicKey,
+        })
+      ),
+      [playerB]
+    )
   );
 
-  console.log(
-    "\n[3/8] L1 join_room (Player B escrows 0.01 SOL -> 0.02 SOL pot)..."
-  );
+  console.log("\n[4/9] L1 join_room (Player B with unique Session Key B -> 0.02 SOL pot)...");
   const joinSig = await sendL1Tx(
     l1,
     new Transaction().add(
@@ -214,11 +232,37 @@ async function main() {
     ),
     [playerB]
   );
-  console.log(
-    `  join_room tx:   https://explorer.solana.com/tx/${joinSig}?cluster=devnet`
+  console.log(`  join_room tx:   https://explorer.solana.com/tx/${joinSig}?cluster=devnet`);
+
+  // Verify non-creator & rogue validator both rejected on L1
+  await expectFail("start_and_delegate with rogue ER validator", () =>
+    sendL1Tx(
+      l1,
+      new Transaction().add(
+        buildStartAndDelegateIx({
+          payer: playerA.publicKey,
+          roomId,
+          validator: Keypair.generate().publicKey,
+        })
+      ),
+      [playerA]
+    )
+  );
+  await expectFail("start_and_delegate called by non-creator Player B", () =>
+    sendL1Tx(
+      l1,
+      new Transaction().add(
+        buildStartAndDelegateIx({
+          payer: playerB.publicKey,
+          roomId,
+          validator: ER_VALIDATOR_PUBKEY,
+        })
+      ),
+      [playerB]
+    )
   );
 
-  console.log("\n[4/8] L1 start_and_delegate (Arena PDA -> MagicBlock ER)...");
+  console.log("\n[5/9] L1 start_and_delegate (Creator -> Pinned MagicBlock ER validator)...");
   const delSig = await sendL1Tx(
     l1,
     new Transaction().add(
@@ -230,18 +274,27 @@ async function main() {
     ),
     [playerA]
   );
-  console.log(
-    `  delegate tx:    https://explorer.solana.com/tx/${delSig}?cluster=devnet`
-  );
+  console.log(`  delegate tx:    https://explorer.solana.com/tx/${delSig}?cluster=devnet`);
 
   const delegated = await waitForOwner(l1, arenaPda, DELEGATION_PROGRAM_ID, 30);
   if (!delegated) throw new Error("Arena PDA did not delegate to DLP in time");
   console.log("  Confirmed on L1: Arena owner == DELEGATION_PROGRAM_ID");
   await new Promise((r) => setTimeout(r, 2500));
 
-  console.log(
-    "\n[5/8] ER begin_round (signed by ephemeral Session Key A, 0 wallet popups, 0 gas)..."
+  console.log("\n[6/9] ER security checks (premature abort_stale_room + no-op tap spam) & begin_round...");
+  await expectFail("ER abort_stale_room before 180s stale timeout", () =>
+    sendErTx(
+      er,
+      new Transaction().add(
+        buildAbortStaleRoomIx({
+          payer: sessionA.publicKey,
+          roomId,
+        })
+      ),
+      [sessionA]
+    )
   );
+
   const beginRes = await sendErTx(
     er,
     new Transaction().add(
@@ -255,9 +308,22 @@ async function main() {
   );
   console.log(`  begin_round ER tx (${beginRes.ms}ms): ${beginRes.sig}`);
 
-  console.log(
-    "\n[6/8] ER gasless Session-Key trading sprint (LONG / SHORT / FLAT on live Pyth Lazer)..."
+  await expectFail("ER tap FLAT -> FLAT no-op spam", () =>
+    sendErTx(
+      er,
+      new Transaction().add(
+        buildTapIx({
+          signer: sessionA.publicKey,
+          roomId,
+          newPosition: POS_FLAT,
+          priceFeed,
+        })
+      ),
+      [sessionA]
+    )
   );
+
+  console.log("\n[7/9] ER gasless Session-Key trading sprint (10s oracle freshness enforced)...");
   const moves: Array<{
     label: string;
     signer: Keypair;
@@ -265,10 +331,10 @@ async function main() {
     waitMs: number;
   }> = [
     { label: "A -> LONG ", signer: sessionA, pos: POS_LONG, waitMs: 3000 },
-    { label: "B -> SHORT", signer: sessionB, pos: POS_SHORT, waitMs: 4000 },
-    { label: "A -> SHORT", signer: sessionA, pos: POS_SHORT, waitMs: 4000 },
-    { label: "B -> LONG ", signer: sessionB, pos: POS_LONG, waitMs: 4000 },
-    { label: "A -> FLAT ", signer: sessionA, pos: POS_FLAT, waitMs: 4000 },
+    { label: "B -> SHORT", signer: sessionB, pos: POS_SHORT, waitMs: 3000 },
+    { label: "A -> SHORT", signer: sessionA, pos: POS_SHORT, waitMs: 3000 },
+    { label: "B -> LONG ", signer: sessionB, pos: POS_LONG, waitMs: 3000 },
+    { label: "A -> FLAT ", signer: sessionA, pos: POS_FLAT, waitMs: 2500 },
   ];
 
   for (const m of moves) {
@@ -292,22 +358,20 @@ async function main() {
     await new Promise((r) => setTimeout(r, m.waitMs));
   }
 
-  // Wait until round ends_at passes on ER clock
+  // Settle right inside the 3s grace window after endsAt
   const erArenaInfo = await er.getAccountInfo(arenaPda);
   if (erArenaInfo) {
     const arenaState = decodeArena(erArenaInfo.data);
-    const remainingMs = Number(arenaState.endsAt) * 1000 - Date.now() + 2500;
+    const remainingMs = Number(arenaState.endsAt) * 1000 - Date.now() + 800;
     if (remainingMs > 0) {
       console.log(
-        `  Waiting ${(remainingMs / 1000).toFixed(1)}s for round timer expiry...`
+        `  Waiting ${(remainingMs / 1000).toFixed(1)}s for round timer expiry (grace window settle)...`
       );
       await new Promise((r) => setTimeout(r, remainingMs));
     }
   }
 
-  console.log(
-    "\n[7/8] ER finish_round (close all positions, crown winner, commit & undelegate to L1)..."
-  );
+  console.log("\n[8/9] ER finish_round (deterministic close + tie mask + commit & undelegate)...");
   const finishRes = await sendErTx(
     er,
     new Transaction().add(
@@ -321,63 +385,71 @@ async function main() {
   );
   console.log(`  finish_round ER tx (${finishRes.ms}ms): ${finishRes.sig}`);
 
-  console.log(
-    "  Waiting for MagicBlock ER commit & ownership return on Solana L1..."
-  );
   const returned = await waitForOwner(
     l1,
     arenaPda,
     CANDLEROYALE_PROGRAM_ID,
     45
   );
-  if (!returned)
-    throw new Error("Arena ownership did not return to program on L1");
+  if (!returned) throw new Error("Arena ownership did not return to program on L1");
 
   const finalArenaInfo = await l1.getAccountInfo(arenaPda, "confirmed");
   if (!finalArenaInfo) throw new Error("Arena account missing on L1");
   const finalArena = decodeArena(finalArenaInfo.data);
-  const winnerSeat = finalArena.players[finalArena.winnerIndex];
+  const winners = getWinningSeatIndices(finalArena);
 
-  console.log("  Committed L1 Final Standings:");
+  console.log(
+    `  Committed L1 Final Standings (winnerMask=0b${finalArena.winnerMask.toString(2)}):`
+  );
   finalArena.players.forEach((p, idx) => {
-    const crown = idx === finalArena.winnerIndex ? " [WINNER]" : "";
+    const crown = winners.includes(idx) ? " [WINNER]" : "";
     console.log(
       `    Seat ${idx}: ${p.wallet.toBase58()} | PnL=${formatPnlPct(p.realizedPnl)} | taps=${p.tapCount}${crown}`
     );
   });
 
-  console.log(
-    "\n[8/8] L1 claim_payout (releasing 0.02 SOL pot from L1 Vault to winner wallet)..."
+  console.log("\n[9/9] L1 claim_payout for winning seat(s) + double-claim guard...");
+  for (const seatIdx of winners) {
+    const recipient = finalArena.players[seatIdx].wallet;
+    const preBal = await l1.getBalance(recipient);
+    const claimSig = await sendL1Tx(
+      l1,
+      new Transaction().add(
+        buildClaimPayoutIx({
+          payer: playerA.publicKey,
+          roomId,
+          seatIndex: seatIdx,
+          recipient,
+        })
+      ),
+      [playerA]
+    );
+    const postBal = await l1.getBalance(recipient);
+    console.log(
+      `  claim_payout seat ${seatIdx}: https://explorer.solana.com/tx/${claimSig}?cluster=devnet (+${((postBal - preBal) / LAMPORTS_PER_SOL).toFixed(5)} SOL)`
+    );
+  }
+
+  await expectFail("duplicate claim_payout on already-paid winning seat", () =>
+    sendL1Tx(
+      l1,
+      new Transaction().add(
+        buildClaimPayoutIx({
+          payer: playerA.publicKey,
+          roomId,
+          seatIndex: winners[0],
+          recipient: finalArena.players[winners[0]].wallet,
+        })
+      ),
+      [playerA]
+    )
   );
-  const preWinnerBal = await l1.getBalance(winnerSeat.wallet);
-  const claimSig = await sendL1Tx(
-    l1,
-    new Transaction().add(
-      buildClaimPayoutIx({
-        payer: playerA.publicKey,
-        roomId,
-        winner: winnerSeat.wallet,
-      })
-    ),
-    [playerA]
-  );
-  const postWinnerBal = await l1.getBalance(winnerSeat.wallet);
+
   const vaultInfo = await l1.getAccountInfo(vaultPda, "confirmed");
   const vault = vaultInfo ? decodeVault(vaultInfo.data) : null;
-
-  console.log(
-    `  claim_payout tx: https://explorer.solana.com/tx/${claimSig}?cluster=devnet`
-  );
-  console.log(
-    `  Vault PDA:       https://explorer.solana.com/address/${vaultPda.toBase58()}?cluster=devnet`
-  );
-  console.log(
-    `  Arena PDA:       https://explorer.solana.com/address/${arenaPda.toBase58()}?cluster=devnet`
-  );
-  console.log(
-    `  Winner balance delta: +${((postWinnerBal - preWinnerBal) / LAMPORTS_PER_SOL).toFixed(5)} SOL (vault.claimed=${vault?.claimed})`
-  );
-  console.log("\nFULL SOLANA L1 <-> MAGICBLOCK ER E2E VERIFIED!");
+  console.log(`  Vault PDA: https://explorer.solana.com/address/${vaultPda.toBase58()}?cluster=devnet (claimed=${vault?.claimed}, mask=0b${vault?.claimedMask.toString(2)})`);
+  console.log(`  Arena PDA: https://explorer.solana.com/address/${arenaPda.toBase58()}?cluster=devnet`);
+  console.log("\nALL SECURITY GATES + FULL L1 <-> MAGICBLOCK ER E2E VERIFIED!");
 }
 
 main().catch((err) => {

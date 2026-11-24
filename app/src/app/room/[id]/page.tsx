@@ -27,6 +27,7 @@ import {
   KeyRound,
   Minus,
   Play,
+  RotateCcw,
   ShieldCheck,
   Trophy,
   Zap,
@@ -44,6 +45,7 @@ import { useOracleStream } from "@/lib/useOracleStream";
 import { pitAudio } from "@/lib/audio";
 import {
   ArenaAccount,
+  buildAbortStaleRoomIx,
   buildBeginRoundIx,
   buildCancelRoomIx,
   buildClaimPayoutIx,
@@ -56,6 +58,8 @@ import {
   findArenaPda,
   findVaultPda,
   formatPnlPct,
+  getWinningSeatIndices,
+  isSeatClaimed,
   PlayerSeat,
   totalSeatPnl,
   VaultAccount,
@@ -66,12 +70,13 @@ import {
   ER_VALIDATOR_PUBKEY,
   MARKET_FEEDS,
   marketFromFeed,
-  NO_WINNER,
   POS_FLAT,
   POS_LONG,
   POS_SHORT,
   PositionDir,
+  SETTLE_GRACE_SECS,
   SOLANA_L1_RPC,
+  STALE_LOBBY_TIMEOUT_SECS,
 } from "@sdk/constants";
 
 interface ExecutionLogEntry {
@@ -109,7 +114,13 @@ export default function RoomPage() {
     [validRoomId, roomIdStr]
   );
 
-  const { publicKey, connected, openModal, sendL1Transaction } = useWallet();
+  const {
+    publicKey,
+    connected,
+    openModal,
+    sendL1Transaction,
+    sendErWalletTransaction,
+  } = useWallet();
 
   const l1Conn = useMemo(() => new Connection(SOLANA_L1_RPC, "confirmed"), []);
   const erConn = useMemo(() => createErConnection(), []);
@@ -142,6 +153,7 @@ export default function RoomPage() {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const lastUrgentSecRef = useRef<number>(-1);
   const victoryPlayedRef = useRef(false);
+  const autoSettledRef = useRef(false);
 
   const feedAddress = arena?.priceFeed ?? MARKET_FEEDS.SOL.address;
   const market = useMemo(() => marketFromFeed(feedAddress), [feedAddress]);
@@ -249,7 +261,7 @@ export default function RoomPage() {
   const remainingSec = useMemo(() => {
     if (!arena) return 0;
     if (arena.status === "Lobby") return Number(arena.durationSecs);
-    if (arena.status === "Finished") return 0;
+    if (arena.status === "Finished" || arena.status === "Aborted") return 0;
     return Math.max(0, (Number(arena.endsAt) * 1000 - nowMs) / 1000);
   }, [arena, nowMs]);
 
@@ -257,6 +269,58 @@ export default function RoomPage() {
     arena?.status === "Live" &&
     arena.endsAt > 0n &&
     nowMs >= Number(arena.endsAt) * 1000;
+
+  const isTerminal =
+    arena?.status === "Finished" || arena?.status === "Aborted";
+
+  const isCreator =
+    publicKey !== null && arena !== null && arena.creator.equals(publicKey);
+
+  const staleAbortAtMs =
+    arena && arena.createdAt > 0n
+      ? (Number(arena.createdAt) + STALE_LOBBY_TIMEOUT_SECS) * 1000
+      : 0;
+
+  const isStaleDelegatedLobby =
+    isDelegated &&
+    arena?.status === "Lobby" &&
+    staleAbortAtMs > 0 &&
+    nowMs >= staleAbortAtMs;
+
+  const staleCountdownSec =
+    staleAbortAtMs > 0
+      ? Math.max(0, Math.ceil((staleAbortAtMs - nowMs) / 1000))
+      : STALE_LOBBY_TIMEOUT_SECS;
+
+  const winningSeatIndices = useMemo(
+    () =>
+      arena && arena.status === "Finished" ? getWinningSeatIndices(arena) : [],
+    [arena]
+  );
+
+  const claimableSeatIndices = useMemo(() => {
+    if (!arena) return [];
+    if (arena.status === "Finished") return winningSeatIndices;
+    if (arena.status === "Aborted") {
+      return Array.from({ length: arena.playerCount }, (_, i) => i);
+    }
+    return [];
+  }, [arena, winningSeatIndices]);
+
+  const seatPayoutLamports = useCallback(
+    (seatIndex: number): bigint => {
+      if (!arena || !vault) return 0n;
+      if (arena.status === "Aborted") return vault.entryFee;
+      if (arena.status === "Finished") {
+        const count = BigInt(winningSeatIndices.length || 1);
+        const base = vault.totalPot / count;
+        const dust = vault.totalPot % count;
+        return base + (seatIndex === arena.winnerIndex ? dust : 0n);
+      }
+      return 0n;
+    },
+    [arena, vault, winningSeatIndices]
+  );
 
   // Audio ticks for final 10 seconds + victory fanfare
   useEffect(() => {
@@ -273,11 +337,11 @@ export default function RoomPage() {
     }
   }, [arena?.status, remainingSec]);
 
-  // Ranked leaderboard with live mark-to-market PnL
+  // Ranked leaderboard with live mark-to-market PnL (ties share equal rank visually)
   const rankedSeats = useMemo(() => {
     if (!arena) return [];
     const liveRaw =
-      arena.status === "Finished"
+      arena.status === "Finished" || arena.status === "Aborted"
         ? arena.lastPrice
         : oracleTick?.rawPrice ?? arena.lastPrice;
     return arena.players
@@ -285,18 +349,36 @@ export default function RoomPage() {
         seat,
         seatIndex: idx,
         livePnl:
-          arena.status === "Finished"
+          arena.status === "Finished" || arena.status === "Aborted"
             ? seat.realizedPnl
             : totalSeatPnl(seat, liveRaw),
       }))
       .sort((a, b) => {
         if (b.livePnl !== a.livePnl) return b.livePnl > a.livePnl ? 1 : -1;
-        if (b.seat.tapCount !== a.seat.tapCount) {
-          return b.seat.tapCount - a.seat.tapCount;
-        }
         return a.seatIndex - b.seatIndex;
       });
   }, [arena, oracleTick]);
+
+  // Helper: sign ER transaction with zero-popup Session Key when available,
+  // or fall back transparently to connected wallet signing if the tab was closed/switched.
+  const dispatchErTx = useCallback(
+    async (buildIx: (signer: PublicKey) => ReturnType<typeof buildTapIx>) => {
+      if (activeSessionKey) {
+        const ix = buildIx(activeSessionKey.publicKey);
+        return sendErSessionTx(
+          erConn,
+          new Transaction().add(ix),
+          activeSessionKey
+        );
+      }
+      if (publicKey) {
+        const ix = buildIx(publicKey);
+        return sendErWalletTransaction(erConn, new Transaction().add(ix));
+      }
+      throw new Error("Connect a Solana Devnet wallet first.");
+    },
+    [activeSessionKey, publicKey, erConn, sendErWalletTransaction]
+  );
 
   // ─── Actions ──────────────────────────────────────────────────────────────
 
@@ -318,7 +400,7 @@ export default function RoomPage() {
       pushLog({ layer: "L1", action: "join_room", sig });
       setBanner({
         kind: "success",
-        text: "Seated on Solana L1 and Session Key bound. Ready to delegate to MagicBlock ER.",
+        text: "Seated on Solana L1 and Session Key bound. Waiting for creator to delegate to MagicBlock ER.",
       });
       await syncState();
     } catch (err: unknown) {
@@ -357,7 +439,7 @@ export default function RoomPage() {
       openModal();
       return;
     }
-    setBusyAction("Delegating Arena PDA to MagicBlock US Devnet ER…");
+    setBusyAction("Delegating Arena PDA to pinned MagicBlock US Devnet ER…");
     try {
       const ix = buildStartAndDelegateIx({
         payer: publicKey,
@@ -382,7 +464,7 @@ export default function RoomPage() {
       await syncState();
       setBanner({
         kind: "success",
-        text: "Arena is LIVE on MagicBlock ER! Tap LONG / SHORT / FLAT — 0 popups, 0 gas.",
+        text: "Arena is LIVE on MagicBlock ER! Tap LONG / SHORT — 0 popups, 0 gas.",
       });
     } catch (err: unknown) {
       setBanner({
@@ -395,19 +477,24 @@ export default function RoomPage() {
   };
 
   const handleBeginRound = async () => {
-    if (!activeSessionKey || !arena) return;
+    if (!arena || !mySeat) return;
+    if (!activeSessionKey && !publicKey) {
+      openModal();
+      return;
+    }
     setBanner(null);
-    setBusyAction("Starting countdown on MagicBlock ER (0 gas)…");
+    setBusyAction(
+      activeSessionKey
+        ? "Starting countdown on MagicBlock ER (0 gas)…"
+        : "Starting countdown on MagicBlock ER (wallet fallback)…"
+    );
     try {
-      const ix = buildBeginRoundIx({
-        signer: activeSessionKey.publicKey,
-        roomId,
-        priceFeed: arena.priceFeed,
-      });
-      const res = await sendErSessionTx(
-        erConn,
-        new Transaction().add(ix),
-        activeSessionKey
+      const res = await dispatchErTx((signer) =>
+        buildBeginRoundIx({
+          signer,
+          roomId,
+          priceFeed: arena.priceFeed,
+        })
       );
       pushLog({
         layer: "ER",
@@ -429,10 +516,19 @@ export default function RoomPage() {
 
   const handleTap = useCallback(
     async (dir: PositionDir) => {
-      if (!arena || !isDelegated || !activeSessionKey || tapping || timerExpired) {
+      if (
+        !arena ||
+        !isDelegated ||
+        !mySeat ||
+        (!activeSessionKey && !publicKey) ||
+        tapping ||
+        timerExpired ||
+        isTerminal
+      ) {
         return;
       }
-      if (arena.status === "Finished") return;
+      // On-chain enforces NoOpPositionChange — never waste a tx on the same direction
+      if (mySeat.position === dir) return;
 
       setTapping(true);
       setBanner(null);
@@ -441,16 +537,13 @@ export default function RoomPage() {
       else pitAudio.playFlat();
 
       try {
-        const ix = buildTapIx({
-          signer: activeSessionKey.publicKey,
-          roomId,
-          newPosition: dir,
-          priceFeed: arena.priceFeed,
-        });
-        const res = await sendErSessionTx(
-          erConn,
-          new Transaction().add(ix),
-          activeSessionKey
+        const res = await dispatchErTx((signer) =>
+          buildTapIx({
+            signer,
+            roomId,
+            newPosition: dir,
+            priceFeed: arena.priceFeed,
+          })
         );
 
         const priceNow = oracleTick?.priceUsd;
@@ -482,20 +575,23 @@ export default function RoomPage() {
     [
       arena,
       isDelegated,
+      mySeat,
       activeSessionKey,
+      publicKey,
       tapping,
       timerExpired,
+      isTerminal,
+      dispatchErTx,
       roomId,
-      erConn,
       oracleTick,
       pushLog,
       syncErArena,
     ]
   );
 
-  // Keyboard hotkeys during active ER match (W/Up = LONG, Space = FLAT, S/Down = SHORT)
+  // Keyboard hotkeys during active ER match (only with 0-popup Session Key so stray keys never trigger wallet popups)
   useEffect(() => {
-    if (!isDelegated || !activeSessionKey || arena?.status === "Finished") return;
+    if (!isDelegated || !activeSessionKey || isTerminal) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (
         e.target instanceof HTMLInputElement ||
@@ -516,30 +612,25 @@ export default function RoomPage() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isDelegated, activeSessionKey, arena?.status, handleTap]);
+  }, [isDelegated, activeSessionKey, isTerminal, handleTap]);
 
-  const handleFinishRound = async () => {
+  const handleFinishRound = useCallback(async () => {
     if (!arena) return;
+    if (!activeSessionKey && !publicKey) {
+      openModal();
+      return;
+    }
     setBanner(null);
     setBusyAction(
       "Closing all positions on MagicBlock ER & committing state back to Solana L1…"
     );
     try {
-      const signerKp = activeSessionKey;
-      if (!signerKp) {
-        throw new Error(
-          "Session key not found in this browser tab. Re-open from the tab that joined the room."
-        );
-      }
-      const ix = buildFinishRoundIx({
-        payer: signerKp.publicKey,
-        roomId,
-        priceFeed: arena.priceFeed,
-      });
-      const res = await sendErSessionTx(
-        erConn,
-        new Transaction().add(ix),
-        signerKp
+      const res = await dispatchErTx((payer) =>
+        buildFinishRoundIx({
+          payer,
+          roomId,
+          priceFeed: arena.priceFeed,
+        })
       );
       pushLog({
         layer: "ER",
@@ -565,7 +656,7 @@ export default function RoomPage() {
       await syncState();
       setBanner({
         kind: "success",
-        text: "Arena settled on Solana L1! Winner can now claim the escrowed SOL pot.",
+        text: "Arena settled on Solana L1! Winners can now claim the escrowed SOL pot.",
       });
     } catch (err: unknown) {
       setBanner({
@@ -578,26 +669,133 @@ export default function RoomPage() {
     } finally {
       setBusyAction(null);
     }
+  }, [
+    arena,
+    activeSessionKey,
+    publicKey,
+    openModal,
+    dispatchErTx,
+    roomId,
+    oracleTick?.priceUsd,
+    pushLog,
+    l1Conn,
+    arenaPda,
+    syncState,
+  ]);
+
+  // Automatically crank finish_round inside the 3s grace window when a 0-popup Session Key is active
+  useEffect(() => {
+    if (
+      isDelegated &&
+      arena?.status === "Live" &&
+      timerExpired &&
+      activeSessionKey &&
+      !busyAction &&
+      !autoSettledRef.current
+    ) {
+      autoSettledRef.current = true;
+      void handleFinishRound();
+    }
+  }, [
+    isDelegated,
+    arena?.status,
+    timerExpired,
+    activeSessionKey,
+    busyAction,
+    handleFinishRound,
+  ]);
+
+  const handleAbortStaleRoom = async () => {
+    if (!arena) return;
+    if (!activeSessionKey && !publicKey) {
+      openModal();
+      return;
+    }
+    setBanner(null);
+    setBusyAction(
+      "Aborting stale ER lobby & returning Arena to Solana L1 for refunds…"
+    );
+    try {
+      const res = await dispatchErTx((payer) =>
+        buildAbortStaleRoomIx({
+          payer,
+          roomId,
+        })
+      );
+      pushLog({
+        layer: "ER",
+        action: "abort_stale_room + undelegate",
+        sig: res.signature,
+        ms: res.latencyMs,
+      });
+
+      setBanner({
+        kind: "info",
+        text: "Stale lobby aborted on ER. Waiting for Arena ownership return on Solana L1…",
+      });
+
+      for (let i = 0; i < 40; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        const info = await l1Conn.getAccountInfo(arenaPda, "confirmed");
+        if (info && info.owner.equals(CANDLEROYALE_PROGRAM_ID)) {
+          break;
+        }
+      }
+
+      await syncState();
+      setBanner({
+        kind: "success",
+        text: "Stale room returned to Solana L1! Every seated trader can now claim their entry fee refund.",
+      });
+    } catch (err: unknown) {
+      setBanner({
+        kind: "error",
+        text:
+          err instanceof Error
+            ? err.message
+            : "Failed to abort stale delegated room.",
+      });
+    } finally {
+      setBusyAction(null);
+    }
   };
 
-  const handleClaimPayout = async () => {
-    if (!arena || !publicKey || arena.winnerIndex === NO_WINNER) return;
-    const winningSeat = arena.players[arena.winnerIndex];
-    if (!winningSeat) return;
+  const handleClaimPayout = async (seatIndex: number) => {
+    if (!arena) return;
+    if (!connected || !publicKey) {
+      openModal();
+      return;
+    }
+    const targetSeat = arena.players[seatIndex];
+    if (!targetSeat) return;
 
+    const isRefund = arena.status === "Aborted";
     setBanner(null);
-    setBusyAction("Releasing escrowed SOL pot from Solana L1 Vault…");
+    setBusyAction(
+      isRefund
+        ? `Refunding entry fee for Seat #${seatIndex + 1} from Solana L1 Vault…`
+        : `Releasing payout for Seat #${seatIndex + 1} from Solana L1 Vault…`
+    );
     try {
       const ix = buildClaimPayoutIx({
         payer: publicKey,
         roomId,
-        winner: winningSeat.wallet,
+        seatIndex,
+        recipient: targetSeat.wallet,
       });
       const sig = await sendL1Transaction(new Transaction().add(ix));
-      pushLog({ layer: "L1", action: "claim_payout", sig });
+      pushLog({
+        layer: "L1",
+        action: isRefund
+          ? `refund(seat #${seatIndex + 1})`
+          : `claim_payout(seat #${seatIndex + 1})`,
+        sig,
+      });
       setBanner({
         kind: "success",
-        text: `Pot paid on Solana L1 to ${shortKey(winningSeat.wallet.toBase58())}!`,
+        text: isRefund
+          ? `Entry fee refunded on Solana L1 to ${shortKey(targetSeat.wallet.toBase58())}!`
+          : `Payout sent on Solana L1 to ${shortKey(targetSeat.wallet.toBase58())}!`,
       });
       await syncState();
     } catch (err: unknown) {
@@ -620,7 +818,7 @@ export default function RoomPage() {
   const potSol = vault ? Number(vault.totalPot) / LAMPORTS_PER_SOL : 0;
   const entrySol = vault ? Number(vault.entryFee) / LAMPORTS_PER_SOL : 0;
   const myLivePnl =
-    mySeat && oracleTick && arena?.status !== "Finished"
+    mySeat && oracleTick && !isTerminal
       ? totalSeatPnl(mySeat, oracleTick.rawPrice)
       : mySeat?.realizedPnl ?? 0n;
 
@@ -631,18 +829,12 @@ export default function RoomPage() {
 
   const canTap =
     isDelegated &&
-    !!activeSessionKey &&
+    !!mySeat &&
+    (!!activeSessionKey || !!publicKey) &&
     arena !== null &&
-    arena.status !== "Finished" &&
+    !isTerminal &&
     !timerExpired &&
     !busyAction;
-
-  const winnerSeat =
-    arena &&
-    arena.status === "Finished" &&
-    arena.winnerIndex < arena.players.length
-      ? arena.players[arena.winnerIndex]
-      : null;
 
   return (
     <main className="shell">
@@ -759,7 +951,7 @@ export default function RoomPage() {
                   className={`pos-chip ${
                     isDelegated
                       ? "long"
-                      : arena.status === "Finished"
+                      : arena.status === "Finished" || arena.status === "Aborted"
                         ? "flat"
                         : "short"
                   }`}
@@ -768,7 +960,9 @@ export default function RoomPage() {
                     ? "ER LIVE"
                     : arena.status === "Finished"
                       ? "L1 SETTLED"
-                      : "L1 LOBBY"}
+                      : arena.status === "Aborted"
+                        ? "L1 ABORTED"
+                        : "L1 LOBBY"}
                 </span>
               </div>
               <div
@@ -791,15 +985,19 @@ export default function RoomPage() {
               <div className="clock-caption">
                 {arena.status === "Lobby"
                   ? isDelegated
-                    ? "Delegated · First tap starts clock"
+                    ? isStaleDelegatedLobby
+                      ? "Stale Lobby · Refund Abort Ready"
+                      : "Delegated · First tap starts clock"
                     : "Waiting in L1 Lobby"
                   : arena.status === "Live"
                     ? timerExpired
                       ? "Clock Zero · Ready to Settle"
                       : "Sprint Live on MagicBlock ER"
-                    : vault.cancelled
-                      ? "Lobby Cancelled"
-                      : "Finalized on Solana L1"}
+                    : arena.status === "Aborted"
+                      ? "Aborted · L1 Refunds Open"
+                      : vault.cancelled
+                        ? "Lobby Cancelled"
+                        : "Finalized on Solana L1"}
               </div>
             </div>
 
@@ -821,10 +1019,16 @@ export default function RoomPage() {
                 style={{ fontSize: 11, color: "var(--ink-secondary)" }}
               >
                 {vault.claimed
-                  ? "Paid out on L1"
+                  ? arena.status === "Aborted"
+                    ? "All refunds paid on L1"
+                    : "Paid out on L1"
                   : vault.cancelled
                     ? "Refunded"
-                    : "Winner takes all"}
+                    : arena.status === "Aborted"
+                      ? "Entry fees refundable"
+                      : winningSeatIndices.length > 1
+                        ? `${winningSeatIndices.length}-way equal tie split`
+                        : "Winner takes all · Ties split"}
               </span>
             </div>
           </section>
@@ -851,7 +1055,7 @@ export default function RoomPage() {
                     <KeyRound size={13} />
                     {activeSessionKey
                       ? `Session Key ${shortKey(activeSessionKey.publicKey.toBase58())} · 0 Popups`
-                      : "Session key lives in creator tab"}
+                      : "Wallet Fallback Mode · Popups Active"}
                   </span>
                 ) : (
                   <span
@@ -893,17 +1097,21 @@ export default function RoomPage() {
                     <div>
                       <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
                         {mySeat
-                          ? "You are seated in this Arena."
+                          ? isCreator
+                            ? "You created and hold Seat #1 in this Arena."
+                            : "You are seated in this Arena."
                           : "Open seat available on Solana Devnet."}
                       </div>
                       <div style={{ fontSize: 12, color: "var(--ink-secondary)" }}>
                         {mySeat
-                          ? "Share the Invite Link so another wallet can join, or delegate now to start trading on MagicBlock ER."
+                          ? isCreator
+                            ? "Share the Invite Link so other wallets can join, then delegate to the pinned MagicBlock ER when ready."
+                            : "Your 0-popup Session Key is bound on L1. Waiting for the room creator to delegate to MagicBlock ER."
                           : `Escrow ${entrySol.toFixed(3)} SOL into the L1 Vault to enter and bind your 0-popup Session Key.`}
                       </div>
                     </div>
 
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                       {!mySeat && arena.playerCount < arena.maxPlayers && (
                         <button
                           type="button"
@@ -918,7 +1126,7 @@ export default function RoomPage() {
                         </button>
                       )}
 
-                      {mySeat && (
+                      {mySeat && isCreator && (
                         <button
                           type="button"
                           id="delegate-arena-btn"
@@ -931,8 +1139,24 @@ export default function RoomPage() {
                         </button>
                       )}
 
+                      {mySeat && !isCreator && (
+                        <span
+                          className="mono"
+                          style={{
+                            fontSize: 12,
+                            padding: "8px 12px",
+                            borderRadius: "var(--radius-sm)",
+                            background: "var(--bg-surface)",
+                            border: "1px solid var(--border-subtle)",
+                            color: "var(--gold)",
+                          }}
+                        >
+                          Waiting for creator {shortKey(arena.creator.toBase58())} to start…
+                        </span>
+                      )}
+
                       {mySeat &&
-                        publicKey?.equals(vault.creator) &&
+                        isCreator &&
                         arena.playerCount === 1 && (
                           <button
                             type="button"
@@ -947,9 +1171,9 @@ export default function RoomPage() {
                   </div>
                 )}
 
-                {isDelegated && arena.status !== "Finished" && (
+                {isDelegated && !isTerminal && (
                   <>
-                    {arena.status === "Lobby" && activeSessionKey && (
+                    {arena.status === "Lobby" && mySeat && (activeSessionKey || publicKey) && (
                       <div
                         style={{
                           marginTop: 14,
@@ -957,6 +1181,7 @@ export default function RoomPage() {
                           justifyContent: "space-between",
                           alignItems: "center",
                           gap: 12,
+                          flexWrap: "wrap",
                           padding: "10px 14px",
                           background: "var(--gold-dim)",
                           border: "1px solid rgba(245, 196, 81, 0.35)",
@@ -967,7 +1192,12 @@ export default function RoomPage() {
                         <span style={{ color: "#fde6a8" }}>
                           Arena is delegated to MagicBlock ER! Tap{" "}
                           <strong>LONG / SHORT</strong> below or click Start Clock
-                          (0 gas).
+                          {activeSessionKey ? " (0 gas, 0 popups)." : " (wallet fallback)."}{" "}
+                          {!isStaleDelegatedLobby && (
+                            <span style={{ color: "var(--ink-secondary)" }}>
+                              Stale refund escape unlocks in {staleCountdownSec}s.
+                            </span>
+                          )}
                         </span>
                         <button
                           type="button"
@@ -981,6 +1211,46 @@ export default function RoomPage() {
                       </div>
                     )}
 
+                    {isStaleDelegatedLobby && (
+                      <div
+                        style={{
+                          marginTop: 12,
+                          padding: 14,
+                          background: "var(--bg-inset)",
+                          border: "1px solid rgba(255, 69, 87, 0.45)",
+                          borderRadius: "var(--radius-md)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 12,
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 14, color: "var(--bear)" }}>
+                            Delegated Lobby Timed Out ({STALE_LOBBY_TIMEOUT_SECS}s)
+                          </div>
+                          <div style={{ fontSize: 12, color: "var(--ink-secondary)" }}>
+                            No round was started after delegation. Anyone can abort and return
+                            this Arena to Solana L1 so all seated traders can reclaim their SOL.
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          id="abort-stale-btn"
+                          className="btn btn-ghost"
+                          style={{
+                            borderColor: "rgba(255, 69, 87, 0.5)",
+                            color: "var(--bear)",
+                          }}
+                          onClick={handleAbortStaleRoom}
+                          disabled={!!busyAction}
+                        >
+                          <RotateCcw size={14} /> Abort & Unlock L1 Refunds
+                        </button>
+                      </div>
+                    )}
+
                     {/* Big Tactile Pit Tap Controls */}
                     <div className="tap-bar">
                       <button
@@ -989,7 +1259,7 @@ export default function RoomPage() {
                         className={`tap-btn long ${
                           mySeat?.position === POS_LONG ? "active" : ""
                         }`}
-                        disabled={!canTap || tapping}
+                        disabled={!canTap || tapping || mySeat?.position === POS_LONG}
                         onClick={() => handleTap(POS_LONG)}
                       >
                         <span
@@ -998,7 +1268,13 @@ export default function RoomPage() {
                         >
                           <ArrowUpRight size={20} /> LONG 20×
                         </span>
-                        <span className="tap-btn-hint">Key [W] or [↑] · 0 Gas</span>
+                        <span className="tap-btn-hint">
+                          {mySeat?.position === POS_LONG
+                            ? "Active Position"
+                            : activeSessionKey
+                              ? "Key [W] or [↑] · 0 Gas"
+                              : "Wallet Fallback · 0 Gas"}
+                        </span>
                       </button>
 
                       <button
@@ -1007,7 +1283,7 @@ export default function RoomPage() {
                         className={`tap-btn flat ${
                           mySeat?.position === POS_FLAT ? "active" : ""
                         }`}
-                        disabled={!canTap || tapping}
+                        disabled={!canTap || tapping || mySeat?.position === POS_FLAT}
                         onClick={() => handleTap(POS_FLAT)}
                       >
                         <span
@@ -1016,7 +1292,13 @@ export default function RoomPage() {
                         >
                           <Minus size={18} /> FLAT
                         </span>
-                        <span className="tap-btn-hint">[Space] Lock PnL</span>
+                        <span className="tap-btn-hint">
+                          {mySeat?.position === POS_FLAT
+                            ? "Active Position"
+                            : activeSessionKey
+                              ? "[Space] Lock PnL"
+                              : "Wallet Fallback · Lock PnL"}
+                        </span>
                       </button>
 
                       <button
@@ -1025,7 +1307,7 @@ export default function RoomPage() {
                         className={`tap-btn short ${
                           mySeat?.position === POS_SHORT ? "active" : ""
                         }`}
-                        disabled={!canTap || tapping}
+                        disabled={!canTap || tapping || mySeat?.position === POS_SHORT}
                         onClick={() => handleTap(POS_SHORT)}
                       >
                         <span
@@ -1034,7 +1316,13 @@ export default function RoomPage() {
                         >
                           <ArrowDownRight size={20} /> SHORT 20×
                         </span>
-                        <span className="tap-btn-hint">Key [S] or [↓] · 0 Gas</span>
+                        <span className="tap-btn-hint">
+                          {mySeat?.position === POS_SHORT
+                            ? "Active Position"
+                            : activeSessionKey
+                              ? "Key [S] or [↓] · 0 Gas"
+                              : "Wallet Fallback · 0 Gas"}
+                        </span>
                       </button>
                     </div>
 
@@ -1058,8 +1346,10 @@ export default function RoomPage() {
                             Clock Hit 0.0s — Seal Final Standings on Solana L1
                           </div>
                           <div style={{ fontSize: 12, color: "var(--ink-secondary)" }}>
-                            Closes all open positions at the live Pyth Lazer price and
-                            undelegates Arena from MagicBlock ER back to Solana L1.
+                            Closes open positions at the live Pyth Lazer price within{" "}
+                            {SETTLE_GRACE_SECS}s of clock zero (or freezes deterministically at{" "}
+                            <span className="mono">last_price</span> after grace) and undelegates
+                            Arena back to Solana L1.
                           </div>
                         </div>
                         <button
@@ -1076,23 +1366,24 @@ export default function RoomPage() {
                   </>
                 )}
 
-                {/* Settled Victory & L1 Claim Panel */}
+                {/* Settled Victory / Tie-Split / Aborted Refund L1 Claim Panel */}
                 {!isDelegated &&
-                  arena.status === "Finished" &&
+                  isTerminal &&
                   !vault.cancelled &&
-                  winnerSeat && (
+                  claimableSeatIndices.length > 0 && (
                     <div
                       style={{
                         marginTop: 16,
                         padding: 20,
                         background: "var(--bg-inset)",
-                        border: "1px solid rgba(245, 196, 81, 0.45)",
+                        border:
+                          arena.status === "Aborted"
+                            ? "1px solid rgba(255, 69, 87, 0.4)"
+                            : "1px solid rgba(245, 196, 81, 0.45)",
                         borderRadius: "var(--radius-md)",
                         display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        gap: 16,
-                        flexWrap: "wrap",
+                        flexDirection: "column",
+                        gap: 14,
                       }}
                     >
                       <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -1101,13 +1392,24 @@ export default function RoomPage() {
                             width: 44,
                             height: 44,
                             borderRadius: 10,
-                            background: "var(--gold-dim)",
-                            color: "var(--gold)",
+                            background:
+                              arena.status === "Aborted"
+                                ? "var(--bear-dim)"
+                                : "var(--gold-dim)",
+                            color:
+                              arena.status === "Aborted"
+                                ? "var(--bear)"
+                                : "var(--gold)",
                             display: "grid",
                             placeItems: "center",
+                            flexShrink: 0,
                           }}
                         >
-                          <Trophy size={22} />
+                          {arena.status === "Aborted" ? (
+                            <RotateCcw size={20} />
+                          ) : (
+                            <Trophy size={22} />
+                          )}
                         </div>
                         <div>
                           <div
@@ -1115,57 +1417,126 @@ export default function RoomPage() {
                             style={{
                               fontSize: 11,
                               textTransform: "uppercase",
-                              color: "var(--gold)",
+                              color:
+                                arena.status === "Aborted"
+                                  ? "var(--bear)"
+                                  : "var(--gold)",
                               letterSpacing: "0.08em",
                             }}
                           >
-                            Verified Solana L1 Winner
-                          </div>
-                          <div
-                            className="display"
-                            style={{ fontSize: 20, fontWeight: 700 }}
-                          >
-                            {shortKey(winnerSeat.wallet.toBase58())}{" "}
-                            <span
-                              className="mono"
-                              style={{
-                                fontSize: 16,
-                                color:
-                                  winnerSeat.realizedPnl >= 0n
-                                    ? "var(--bull)"
-                                    : "var(--bear)",
-                              }}
-                            >
-                              {formatPnlPct(winnerSeat.realizedPnl)}
-                            </span>
+                            {arena.status === "Aborted"
+                              ? "Stale Lobby Aborted · Solana L1 Refunds"
+                              : winningSeatIndices.length > 1
+                                ? `Verified Solana L1 Tie Split (${winningSeatIndices.length}-Way)`
+                                : "Verified Solana L1 Winner"}
                           </div>
                           <div
                             className="mono"
-                            style={{ fontSize: 12, color: "var(--ink-secondary)" }}
+                            style={{ fontSize: 12, color: "var(--ink-secondary)", marginTop: 2 }}
                           >
-                            {winnerSeat.tapCount} gasless ER taps · Pot:{" "}
-                            {potSol.toFixed(3)} SOL
+                            Escrowed Pot: {potSol.toFixed(3)} SOL ·{" "}
+                            {arena.status === "Aborted"
+                              ? `Each trader reclaims ${entrySol.toFixed(3)} SOL`
+                              : winningSeatIndices.length > 1
+                                ? "Exact tie splits the pot equally across tied top seats"
+                                : "Permissionless L1 vault release to verified winner"}
                           </div>
                         </div>
                       </div>
 
-                      {!vault.claimed && potSol > 0 ? (
-                        <button
-                          type="button"
-                          id="claim-payout-btn"
-                          className="btn btn-primary btn-lg"
-                          onClick={handleClaimPayout}
-                          disabled={!!busyAction}
-                        >
-                          {connected
-                            ? `Claim ${potSol.toFixed(3)} SOL on Solana L1`
-                            : "Connect Wallet to Claim"}
-                        </button>
-                      ) : (
-                        <span className="pos-chip long" style={{ height: 32, padding: "0 12px" }}>
-                          {potSol > 0 ? "L1 Payout Settled ✓" : "Free Match Complete ✓"}
-                        </span>
-                      )}
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                        {claimableSeatIndices.map((seatIdx) => {
+                          const seat = arena.players[seatIdx];
+                          if (!seat) return null;
+                          const shareLamports = seatPayoutLamports(seatIdx);
+                          const shareSol = Number(shareLamports) / LAMPORTS_PER_SOL;
+                          const claimed = isSeatClaimed(vault, seatIdx);
+                          const isMe =
+                            publicKey !== null && seat.wallet.equals(publicKey);
+
+                          return (
+                            <div
+                              key={seatIdx}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                                gap: 12,
+                                flexWrap: "wrap",
+                                padding: "12px 14px",
+                                borderRadius: "var(--radius-sm)",
+                                background: "var(--bg-surface)",
+                                border: "1px solid var(--border-subtle)",
+                              }}
+                            >
+                              <div>
+                                <div
+                                  className="display"
+                                  style={{ fontSize: 17, fontWeight: 700 }}
+                                >
+                                  {shortKey(seat.wallet.toBase58())}{" "}
+                                  {isMe && (
+                                    <span
+                                      className="mono"
+                                      style={{ fontSize: 12, color: "var(--gold)" }}
+                                    >
+                                      (you)
+                                    </span>
+                                  )}{" "}
+                                  {arena.status === "Finished" && (
+                                    <span
+                                      className="mono"
+                                      style={{
+                                        fontSize: 14,
+                                        color:
+                                          seat.realizedPnl >= 0n
+                                            ? "var(--bull)"
+                                            : "var(--bear)",
+                                      }}
+                                    >
+                                      {formatPnlPct(seat.realizedPnl)}
+                                    </span>
+                                  )}
+                                </div>
+                                <div
+                                  className="mono"
+                                  style={{ fontSize: 11, color: "var(--ink-secondary)" }}
+                                >
+                                  Seat #{seatIdx + 1} · {seat.tapCount} ER taps · Share:{" "}
+                                  {shareSol.toFixed(4)} SOL
+                                </div>
+                              </div>
+
+                              {!claimed && shareLamports > 0n ? (
+                                <button
+                                  type="button"
+                                  id={`claim-payout-seat-${seatIdx}`}
+                                  className="btn btn-primary"
+                                  onClick={() => handleClaimPayout(seatIdx)}
+                                  disabled={!!busyAction}
+                                >
+                                  {connected
+                                    ? arena.status === "Aborted"
+                                      ? `Refund ${shareSol.toFixed(3)} SOL`
+                                      : `Claim ${shareSol.toFixed(3)} SOL`
+                                    : "Connect Wallet to Claim"}
+                                </button>
+                              ) : (
+                                <span
+                                  className="pos-chip long"
+                                  style={{ height: 30, padding: "0 12px" }}
+                                >
+                                  {shareLamports > 0n
+                                    ? arena.status === "Aborted"
+                                      ? "L1 Refund Settled ✓"
+                                      : "L1 Payout Settled ✓"
+                                    : "Free Match Complete ✓"}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
               </div>
@@ -1241,13 +1612,17 @@ export default function RoomPage() {
                         publicKey !== null && row.seat.wallet.equals(publicKey);
                       const isWinner =
                         arena.status === "Finished" &&
-                        row.seatIndex === arena.winnerIndex;
+                        winningSeatIndices.includes(row.seatIndex);
                       return (
                         <div
                           key={row.seat.wallet.toBase58()}
                           className={`seat-row ${isMe ? "me" : ""}`}
                         >
-                          <span className={`seat-rank ${rank === 0 ? "top" : ""}`}>
+                          <span
+                            className={`seat-rank ${
+                              rank === 0 || isWinner ? "top" : ""
+                            }`}
+                          >
                             {isWinner ? <Crown size={14} /> : `#${rank + 1}`}
                           </span>
                           <div>

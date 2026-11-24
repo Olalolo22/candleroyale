@@ -24,7 +24,7 @@ export const SOLANA_L1_RPC =
 export const SOLANA_L1_WS =
   process.env.NEXT_PUBLIC_SOLANA_WS || "wss://api.devnet.solana.com";
 
-// Default MagicBlock Ephemeral Rollup validator (US Devnet — ticks live Pyth Lazer feeds at ~50-200ms)
+// Pinned MagicBlock US Devnet ER validator (enforced on-chain in start_and_delegate)
 export const ER_VALIDATORS = {
   us: {
     label: "US Devnet ER",
@@ -32,28 +32,12 @@ export const ER_VALIDATORS = {
     ws: "wss://devnet-us.magicblock.app",
     pubkey: new PublicKey("MUS3hc9TCw4cGC12vHNoYcCGzJG1txjgQLZWVoeNHNd"),
   },
-  eu: {
-    label: "EU Devnet ER",
-    rpc: "https://devnet-eu.magicblock.app",
-    ws: "wss://devnet-eu.magicblock.app",
-    pubkey: new PublicKey("MEUGGrYPxKk17hCr7wpT6s8dtNokZj5U2L57vjYMS8e"),
-  },
-  as: {
-    label: "Asia Devnet ER",
-    rpc: "https://devnet-as.magicblock.app",
-    ws: "wss://devnet-as.magicblock.app",
-    pubkey: new PublicKey("MAS1Dt9qreoRMQ14YQuhg8UTZMMzDdKhmkZMECCzk57"),
-  },
 } as const;
 
 export const DEFAULT_ER = ER_VALIDATORS.us;
-export const ER_RPC_URL =
-  process.env.NEXT_PUBLIC_ER_RPC || DEFAULT_ER.rpc;
-export const ER_WS_URL =
-  process.env.NEXT_PUBLIC_ER_WS || DEFAULT_ER.ws;
-export const ER_VALIDATOR_PUBKEY = new PublicKey(
-  process.env.NEXT_PUBLIC_ER_VALIDATOR || DEFAULT_ER.pubkey.toBase58()
-);
+export const ER_RPC_URL = process.env.NEXT_PUBLIC_ER_RPC || DEFAULT_ER.rpc;
+export const ER_WS_URL = process.env.NEXT_PUBLIC_ER_WS || DEFAULT_ER.ws;
+export const ER_VALIDATOR_PUBKEY = DEFAULT_ER.pubkey;
 
 // Live MagicBlock Pyth Lazer Price Feeds on Devnet ER (8 decimals)
 export interface MarketFeed {
@@ -104,10 +88,15 @@ export const DELEGATION_METADATA_TAG = new TextEncoder().encode(
   "delegation-metadata"
 );
 
+export const VAULT_ACCOUNT_SIZE = 68;
+export const ARENA_ACCOUNT_SIZE = 700;
 export const MAX_PLAYERS = 6;
 export const ARENA_LEVERAGE = 20;
 export const PNL_SCALE = 1_000_000; // 10_000 = +1.00%
 export const NO_WINNER = 255;
+export const MAX_ORACLE_AGE_SECS = 10;
+export const SETTLE_GRACE_SECS = 3;
+export const STALE_LOBBY_TIMEOUT_SECS = 180;
 
 export const POS_SHORT = -1 as const;
 export const POS_FLAT = 0 as const;

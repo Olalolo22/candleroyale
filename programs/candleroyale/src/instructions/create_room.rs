@@ -56,6 +56,12 @@ pub fn handle_create_room(
         is_supported_feed(&price_feed),
         CandleRoyaleError::UnsupportedPriceFeed
     );
+    require!(
+        session_key != Pubkey::default(),
+        CandleRoyaleError::SessionKeyCollision
+    );
+
+    let clock = Clock::get()?;
 
     if entry_fee > 0 {
         let cpi_ctx = CpiContext::new(
@@ -75,6 +81,7 @@ pub fn handle_create_room(
     vault.total_pot = entry_fee;
     vault.claimed = false;
     vault.cancelled = false;
+    vault.claimed_mask = 0;
     vault.bump = ctx.bumps.vault;
 
     let arena = &mut ctx.accounts.arena;
@@ -85,12 +92,14 @@ pub fn handle_create_room(
     arena.duration_secs = duration_secs;
     arena.max_players = max_players;
     arena.status = ArenaStatus::Lobby;
+    arena.created_at = clock.unix_timestamp;
     arena.started_at = 0;
     arena.ends_at = 0;
     arena.start_price = 0;
     arena.last_price = 0;
     arena.player_count = 1;
     arena.winner_index = NO_WINNER;
+    arena.winner_mask = 0;
     arena.players = [PlayerSeat::default(); MAX_PLAYERS];
     arena.players[0] = PlayerSeat {
         wallet: ctx.accounts.creator.key(),

@@ -44,11 +44,28 @@ pub fn handle_join_room(
         arena.player_count < arena.max_players,
         CandleRoyaleError::RoomFull
     );
+    require!(
+        session_key != Pubkey::default(),
+        CandleRoyaleError::SessionKeyCollision
+    );
 
     let player_key = ctx.accounts.player.key();
     let count = arena.player_count as usize;
+    // Enforce complete disjointness across wallets and session keys for all seats.
     for seat in arena.players.iter().take(count) {
         require!(seat.wallet != player_key, CandleRoyaleError::AlreadyJoined);
+        require!(
+            seat.session_key != player_key,
+            CandleRoyaleError::SessionKeyCollision
+        );
+        require!(
+            seat.wallet != session_key,
+            CandleRoyaleError::SessionKeyCollision
+        );
+        require!(
+            seat.session_key != session_key,
+            CandleRoyaleError::SessionKeyCollision
+        );
     }
 
     let entry_fee = vault.entry_fee;

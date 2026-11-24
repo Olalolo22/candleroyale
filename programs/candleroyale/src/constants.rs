@@ -24,6 +24,9 @@ pub const POS_LONG: i8 = 1;
 /// Unset winner sentinel.
 pub const NO_WINNER: u8 = u8::MAX;
 
+/// Pinned MagicBlock US Devnet Ephemeral Rollup validator enforced on-chain in `start_and_delegate`.
+pub const PINNED_ER_VALIDATOR: Pubkey = pubkey!("MUS3hc9TCw4cGC12vHNoYcCGzJG1txjgQLZWVoeNHNd");
+
 /// MagicBlock Real-Time Pricing Oracle program (Pyth Lazer on ER).
 pub const ORACLE_PROGRAM_ID: Pubkey = pubkey!("PriCems5tHihc6UDXDjzjeawomAwBduWMGAi8ZUjppd");
 
@@ -34,5 +37,12 @@ pub const BTC_USD_FEED: Pubkey = pubkey!("71wtTRDY8Gxgw56bXFt2oc6qeAbTxzStdNiC42
 /// MagicBlock Pyth Lazer ETH/USD feed on Devnet ER.
 pub const ETH_USD_FEED: Pubkey = pubkey!("5vaYr1hpv8yrSpu8w3K95x22byYxUJCCNCSYJtqVWPvG");
 
-/// Maximum acceptable age of an oracle price update in seconds.
-pub const MAX_ORACLE_AGE_SECS: i64 = 300;
+/// Tight maximum acceptable oracle age (seconds) for 20x leveraged micro-trading.
+pub const MAX_ORACLE_AGE_SECS: i64 = 10;
+
+/// Post-expiry grace window (seconds) during which `finish_round` may close open positions at live oracle price.
+/// After `ends_at + SETTLE_GRACE_SECS`, settlement deterministically closes at `arena.last_price` to eliminate timing attacks.
+pub const SETTLE_GRACE_SECS: i64 = 3;
+
+/// Seconds a delegated Lobby room can sit idle without starting before anyone can call `abort_stale_room` to undelegate and refund.
+pub const STALE_LOBBY_TIMEOUT_SECS: i64 = 180;

@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use ephemeral_rollups_sdk::anchor::delegate;
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
 
-use crate::constants::ARENA_SEED;
+use crate::constants::{ARENA_SEED, PINNED_ER_VALIDATOR};
 use crate::errors::CandleRoyaleError;
 use crate::state::{Arena, ArenaStatus};
 
@@ -29,6 +29,15 @@ pub fn handle_start_and_delegate(ctx: Context<StartAndDelegate>, room_id: u64) -
         CandleRoyaleError::InvalidArenaAccount
     );
 
+    // Reject any caller attempt to substitute an unapproved or dead ER validator.
+    if let Some(passed) = ctx.remaining_accounts.first() {
+        require_keys_eq!(
+            passed.key(),
+            PINNED_ER_VALIDATOR,
+            CandleRoyaleError::InvalidValidator
+        );
+    }
+
     // Deserialize in a tight scope so the immutable borrow drops before the delegation CPI.
     {
         require_keys_eq!(
@@ -53,23 +62,20 @@ pub fn handle_start_and_delegate(ctx: Context<StartAndDelegate>, room_id: u64) -
             CandleRoyaleError::PlayerNotFound
         );
 
-        let payer_key = ctx.accounts.payer.key();
-        let count = arena_data.player_count as usize;
-        let is_authorized = payer_key == arena_data.creator
-            || arena_data
-                .players
-                .iter()
-                .take(count)
-                .any(|s| s.wallet == payer_key || s.session_key == payer_key);
-        require!(is_authorized, CandleRoyaleError::UnauthorizedSigner);
+        // Only the room creator can lock the lobby and delegate the arena to ER.
+        require_keys_eq!(
+            ctx.accounts.payer.key(),
+            arena_data.creator,
+            CandleRoyaleError::UnauthorizedSigner
+        );
     }
 
-    let validator = ctx.remaining_accounts.first().map(|acc| acc.key());
+    // Always pin delegation to the protocol-enforced MagicBlock ER validator.
     ctx.accounts.delegate_arena(
         &ctx.accounts.payer,
         &[ARENA_SEED, room_id_bytes.as_ref()],
         DelegateConfig {
-            validator,
+            validator: Some(PINNED_ER_VALIDATOR),
             ..Default::default()
         },
     )?;
@@ -77,7 +83,7 @@ pub fn handle_start_and_delegate(ctx: Context<StartAndDelegate>, room_id: u64) -
     emit!(ArenaDelegated {
         room_id,
         arena: ctx.accounts.arena.key(),
-        validator: validator.unwrap_or_default(),
+        validator: PINNED_ER_VALIDATOR,
     });
 
     Ok(())

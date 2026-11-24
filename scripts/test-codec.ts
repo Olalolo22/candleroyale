@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { Connection, Keypair } from "@solana/web3.js";
 import {
+  buildAbortStaleRoomIx,
   buildBeginRoundIx,
   buildClaimPayoutIx,
   buildCreateRoomIx,
@@ -30,45 +31,24 @@ function anchorSighash(preimage: string): number[] {
 }
 
 async function main() {
-  console.log("1. Verifying Anchor 8-byte discriminators...");
-  assert.deepEqual(
-    Array.from(DISCRIMINATORS.create_room),
-    anchorSighash("global:create_room")
-  );
-  assert.deepEqual(
-    Array.from(DISCRIMINATORS.join_room),
-    anchorSighash("global:join_room")
-  );
-  assert.deepEqual(
-    Array.from(DISCRIMINATORS.cancel_room),
-    anchorSighash("global:cancel_room")
-  );
-  assert.deepEqual(
-    Array.from(DISCRIMINATORS.start_and_delegate),
-    anchorSighash("global:start_and_delegate")
-  );
-  assert.deepEqual(
-    Array.from(DISCRIMINATORS.begin_round),
-    anchorSighash("global:begin_round")
-  );
-  assert.deepEqual(Array.from(DISCRIMINATORS.tap), anchorSighash("global:tap"));
-  assert.deepEqual(
-    Array.from(DISCRIMINATORS.finish_round),
-    anchorSighash("global:finish_round")
-  );
-  assert.deepEqual(
-    Array.from(DISCRIMINATORS.claim_payout),
-    anchorSighash("global:claim_payout")
-  );
-  assert.deepEqual(
-    Array.from(DISCRIMINATORS.account_Vault),
-    anchorSighash("account:Vault")
-  );
-  assert.deepEqual(
-    Array.from(DISCRIMINATORS.account_Arena),
-    anchorSighash("account:Arena")
-  );
-  console.log("   All 10 discriminators match sha256 exactly.");
+  console.log("1. Verifying Anchor 8-byte discriminators (11 total)...");
+  const checks: Array<[Uint8Array, string]> = [
+    [DISCRIMINATORS.create_room, "global:create_room"],
+    [DISCRIMINATORS.join_room, "global:join_room"],
+    [DISCRIMINATORS.cancel_room, "global:cancel_room"],
+    [DISCRIMINATORS.start_and_delegate, "global:start_and_delegate"],
+    [DISCRIMINATORS.begin_round, "global:begin_round"],
+    [DISCRIMINATORS.tap, "global:tap"],
+    [DISCRIMINATORS.finish_round, "global:finish_round"],
+    [DISCRIMINATORS.abort_stale_room, "global:abort_stale_room"],
+    [DISCRIMINATORS.claim_payout, "global:claim_payout"],
+    [DISCRIMINATORS.account_Vault, "account:Vault"],
+    [DISCRIMINATORS.account_Arena, "account:Arena"],
+  ];
+  for (const [actual, preimage] of checks) {
+    assert.deepEqual(Array.from(actual), anchorSighash(preimage));
+  }
+  console.log("   All 11 discriminators match sha256 exactly.");
 
   console.log("2. Verifying leveraged PnL parity with Rust unit tests...");
   assert.equal(
@@ -83,7 +63,7 @@ async function main() {
   assert.equal(formatPnlPct(-24_500n), "-2.45%");
   console.log("   PnL calculations match Rust 1:1.");
 
-  console.log("3. Verifying instruction builders & account counts...");
+  console.log("3. Verifying all 9 instruction builders & layouts...");
   const creator = Keypair.generate().publicKey;
   const session = Keypair.generate().publicKey;
   const roomId = 42n;
@@ -137,10 +117,18 @@ async function main() {
     5
   );
   assert.equal(
-    buildClaimPayoutIx({ payer: creator, roomId, winner: creator }).keys.length,
+    buildAbortStaleRoomIx({ payer: creator, roomId }).keys.length,
     4
   );
-  console.log("   All 8 instruction builders verified.");
+  const ixClaim = buildClaimPayoutIx({
+    payer: creator,
+    roomId,
+    seatIndex: 0,
+    recipient: creator,
+  });
+  assert.equal(ixClaim.keys.length, 4);
+  assert.equal(ixClaim.data.length, 8 + 8 + 1);
+  console.log("   All 9 instruction builders verified.");
 
   console.log(`4. Reading LIVE Pyth Lazer feeds from ${ER_RPC_URL}...`);
   const erConn = new Connection(ER_RPC_URL, "confirmed");

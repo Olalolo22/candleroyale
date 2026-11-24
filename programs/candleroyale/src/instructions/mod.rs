@@ -1,3 +1,4 @@
+pub mod abort_stale_room;
 pub mod begin_round;
 pub mod cancel_room;
 pub mod claim_payout;
@@ -7,6 +8,7 @@ pub mod join_room;
 pub mod start_and_delegate;
 pub mod tap;
 
+pub use abort_stale_room::*;
 pub use begin_round::*;
 pub use cancel_room::*;
 pub use claim_payout::*;

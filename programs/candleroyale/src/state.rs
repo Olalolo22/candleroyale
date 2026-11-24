@@ -8,6 +8,7 @@ pub enum ArenaStatus {
     Lobby,
     Live,
     Finished,
+    Aborted,
 }
 
 impl Default for ArenaStatus {
@@ -25,6 +26,8 @@ pub struct Vault {
     pub total_pot: u64,
     pub claimed: bool,
     pub cancelled: bool,
+    /// Bitmask of seats that have already claimed their payout/tie-split/abort-refund.
+    pub claimed_mask: u8,
     pub bump: u8,
 }
 
@@ -36,6 +39,7 @@ impl Vault {
         + 8                     // total_pot
         + 1                     // claimed
         + 1                     // cancelled
+        + 1                     // claimed_mask
         + 1;                    // bump
 }
 
@@ -62,7 +66,7 @@ impl PlayerSeat {
 }
 
 /// Live battle state. Delegated to MagicBlock ER for sub-50ms gasless trading,
-/// then committed & undelegated back to Solana L1 when the 60s timer completes.
+/// then committed & undelegated back to Solana L1 when the timer completes (or aborts if stale).
 #[account]
 pub struct Arena {
     pub room_id: u64,
@@ -72,12 +76,16 @@ pub struct Arena {
     pub duration_secs: i64,
     pub max_players: u8,
     pub status: ArenaStatus,
+    /// Unix timestamp when the room was created on L1 (governs stale-lobby abort escape hatch).
+    pub created_at: i64,
     pub started_at: i64,
     pub ends_at: i64,
     pub start_price: i64,
     pub last_price: i64,
     pub player_count: u8,
     pub winner_index: u8,
+    /// Bitmask of all seats tied for the highest final PnL (supports fair tie-splitting).
+    pub winner_mask: u8,
     pub players: [PlayerSeat; MAX_PLAYERS],
     pub bump: u8,
 }
@@ -91,12 +99,14 @@ impl Arena {
         + 8                                              // duration_secs
         + 1                                              // max_players
         + 1                                              // status
+        + 8                                              // created_at
         + 8                                              // started_at
         + 8                                              // ends_at
         + 8                                              // start_price
         + 8                                              // last_price
         + 1                                              // player_count
         + 1                                              // winner_index
+        + 1                                              // winner_mask
         + (PlayerSeat::SIZE * MAX_PLAYERS)               // players[6] = 558
         + 1;                                             // bump
 }
@@ -133,14 +143,12 @@ mod tests {
 
     #[test]
     fn test_pnl_long_gain() {
-        // +0.5% price move at 20x leverage = +10.00% = +100_000 micro-units
         let delta = compute_pnl_delta(POS_LONG, 10_000_000_000, 10_050_000_000).unwrap();
         assert_eq!(delta, 100_000);
     }
 
     #[test]
     fn test_pnl_short_gain() {
-        // -0.25% price move on SHORT at 20x leverage = +5.00% = +50_000
         let delta = compute_pnl_delta(POS_SHORT, 10_000_000_000, 9_975_000_000).unwrap();
         assert_eq!(delta, 50_000);
     }

@@ -22,6 +22,7 @@ import {
   DISCRIMINATORS,
 } from "@sdk/codec";
 import {
+  ARENA_ACCOUNT_SIZE,
   CANDLEROYALE_PROGRAM_ID,
   DELEGATION_PROGRAM_ID,
   MARKET_FEEDS,
@@ -69,7 +70,7 @@ export default function LobbyPage() {
       const accounts = await l1Conn.getProgramAccounts(
         CANDLEROYALE_PROGRAM_ID,
         {
-          filters: [{ dataSize: 691 }],
+          filters: [{ dataSize: ARENA_ACCOUNT_SIZE }],
         }
       );
       const parsed: DiscoveredRoom[] = [];

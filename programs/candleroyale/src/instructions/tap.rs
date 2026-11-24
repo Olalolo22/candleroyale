@@ -32,11 +32,19 @@ pub fn handle_tap(ctx: Context<Tap>, room_id: u64, new_position: i8) -> Result<(
     let signer_key = ctx.accounts.signer.key();
     let count = arena.player_count as usize;
 
+    // Prioritize session_key lookup before wallet lookup (and join_room guarantees disjointness).
     let seat_idx = arena
         .players
         .iter()
         .take(count)
-        .position(|s| s.session_key == signer_key || s.wallet == signer_key)
+        .position(|s| s.session_key == signer_key)
+        .or_else(|| {
+            arena
+                .players
+                .iter()
+                .take(count)
+                .position(|s| s.wallet == signer_key)
+        })
         .ok_or(CandleRoyaleError::UnauthorizedSigner)?;
 
     let clock = Clock::get()?;
@@ -64,6 +72,12 @@ pub fn handle_tap(ctx: Context<Tap>, room_id: u64, new_position: i8) -> Result<(
     require!(now <= arena.ends_at, CandleRoyaleError::RoundExpired);
 
     let seat = &mut arena.players[seat_idx];
+    // Reject no-op trades (e.g., FLAT -> FLAT) so tap counts cannot be spammed.
+    require!(
+        new_position != seat.position,
+        CandleRoyaleError::NoOpPositionChange
+    );
+
     let delta = compute_pnl_delta(seat.position, seat.entry_price, tick.price)?;
     seat.realized_pnl = seat
         .realized_pnl
