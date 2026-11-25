@@ -2,6 +2,12 @@
 
 **60-second PvP micro-trading battle royale on Solana & MagicBlock Ephemeral Rollups.**
 
+<p align="center">
+  <img src="docs/candleroyale-round.gif" width="820" alt="The last 15 seconds of a CandleRoyale round: the player flips Long, Flat and Short on a live BTC chart while three practice bots trade, standings reshuffle, the clock turns red, the room settles itself at zero and the winner card says 'The pot is yours'.">
+  <br>
+  <sub>The last 15 seconds of a round against three practice bots. UI capture with scripted price data; live Devnet transaction proofs are below.</sub>
+</p>
+
 2–6 players escrow real SOL into a Solana L1 vault, delegate the battleground into a **MagicBlock Ephemeral Rollup**, and race for 60 seconds flipping **20× LONG / FLAT / SHORT** against live **Pyth Lazer** feeds with **zero gas** and **zero wallet popups** via scoped in-browser Session Keys. When the clock hits zero, MagicBlock commits and undelegates the verified winner back to Solana L1 to unlock the entire pot.
 
 Built for **MagicBlock Solana Blitz v10 — Theme: Entertainment Finance**.

@@ -1395,6 +1395,18 @@ fieldset {
   font-weight: 700;
 }
 
+.standing .who .bot-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: var(--r-chip);
+  background: var(--rail);
+  color: var(--slate);
+  font-size: 10px;
+  font-weight: 600;
+  vertical-align: 1px;
+}
+
 .standing .pnl {
   font-family: var(--font-display);
   font-weight: 800;

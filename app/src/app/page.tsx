@@ -479,8 +479,8 @@ export default function LobbyPage() {
                 ) : tab === "open" ? (
                   <>
                     <strong>No open rooms right now.</strong>
-                    Open one with the form and send the link to a friend, or open
-                    it in a second tab with the Devnet burner.
+                    Open one and send the link to a friend, or fill the seats with
+                    practice bots and play right away.
                   </>
                 ) : tab === "trading" ? (
                   <>

@@ -18,6 +18,7 @@ import {
 } from "@solana/web3.js";
 import {
   ArrowDown,
+  Bot,
   ArrowLeft,
   ArrowUp,
   Check,
@@ -41,6 +42,20 @@ import {
 } from "@/lib/session";
 import { useOracleStream } from "@/lib/useOracleStream";
 import { pitAudio } from "@/lib/audio";
+import {
+  BOT_STYLE_LABEL,
+  BotMemory,
+  PracticeBot,
+  PricePoint,
+  buildBotFundingTx,
+  createBots,
+  decideBotMove,
+  loadBots,
+  nextBotDelayMs,
+  saveBots,
+  sendL1AsKeypair,
+  sweepBot,
+} from "@/lib/bots";
 import {
   badgeFor,
   fmtSol,
@@ -119,6 +134,7 @@ export default function RoomPage() {
     openModal,
     sendL1Transaction,
     sendErWalletTransaction,
+    refreshBalance,
   } = useWallet();
 
   const l1Conn = useMemo(() => new Connection(SOLANA_L1_RPC, "confirmed"), []);
@@ -893,6 +909,250 @@ export default function RoomPage() {
     }
   };
 
+  // ─── Practice bots ────────────────────────────────────────────────────────
+  // Real, funded seats driven from this tab. See lib/bots.ts.
+  const [bots, setBots] = useState<PracticeBot[]>([]);
+  const [botsSwept, setBotsSwept] = useState(false);
+  useEffect(() => {
+    if (validRoomId) setBots(loadBots(roomIdStr));
+  }, [validRoomId, roomIdStr]);
+
+  const botByWallet = useMemo(
+    () => new Map(bots.map((b) => [b.wallet.publicKey.toBase58(), b])),
+    [bots]
+  );
+  const seatedBots = useMemo(
+    () =>
+      arena
+        ? bots.filter((b) => arena.players.some((s) => s.wallet.equals(b.wallet.publicKey)))
+        : [],
+    [arena, bots]
+  );
+  const seatedBotsRef = useRef<PracticeBot[]>([]);
+  seatedBotsRef.current = seatedBots;
+  const arenaRef = useRef<ArenaAccount | null>(arena);
+  arenaRef.current = arena;
+
+  // Rolling 30s price history the bot strategies read from
+  const priceHistoryRef = useRef<PricePoint[]>([]);
+  useEffect(() => {
+    if (!oracleTick) return;
+    const h = priceHistoryRef.current;
+    const now = Date.now();
+    h.push({ t: now, p: oracleTick.priceUsd });
+    while (h.length && now - h[0].t > 30_000) h.shift();
+  }, [oracleTick]);
+
+  const handleAddBots = async () => {
+    if (!arena || !vault) return;
+    if (!connected || !publicKey) {
+      openModal();
+      return;
+    }
+    const count = Math.min(3, arena.maxPlayers - arena.playerCount);
+    if (count <= 0) return;
+    setBanner(null);
+
+    const previous = bots;
+    const fresh = createBots(count, previous);
+    const all = [...previous, ...fresh];
+    // Persist keys before any SOL moves, so funded bots can never be lost
+    saveBots(roomIdStr, all);
+    setBots(all);
+
+    const noun = count === 1 ? "bot" : "bots";
+    try {
+      setBusyAction(`Funding ${count} practice ${noun}. Approve once in your wallet…`);
+      let fundSig: string;
+      try {
+        fundSig = await sendL1Transaction(
+          buildBotFundingTx(publicKey, fresh, vault.entryFee)
+        );
+      } catch (err) {
+        // Nothing was sent: forget the unfunded bots
+        saveBots(roomIdStr, previous);
+        setBots(previous);
+        throw err;
+      }
+      pushLog({ layer: "L1", action: `fund ${count} practice ${noun}`, sig: fundSig });
+
+      for (let i = 0; i < fresh.length; i++) {
+        const b = fresh[i];
+        setBusyAction(`Seating the ${BOT_STYLE_LABEL[b.style].toLowerCase()} (${i + 1} of ${count})…`);
+        const sig = await sendL1AsKeypair(
+          l1Conn,
+          new Transaction().add(
+            buildJoinRoomIx({
+              player: b.wallet.publicKey,
+              roomId,
+              sessionKey: b.session.publicKey,
+            })
+          ),
+          b.wallet
+        );
+        pushLog({ layer: "L1", action: `join_room (${BOT_STYLE_LABEL[b.style]})`, sig });
+      }
+      setBanner({
+        kind: "success",
+        text: `${count} practice ${noun} seated. Start the room when you're ready.`,
+      });
+    } catch (err: unknown) {
+      setBanner({
+        kind: "error",
+        text:
+          err instanceof Error
+            ? err.message
+            : "Couldn't seat the bots. Any SOL already sent stays in their wallets and can be returned after the round.",
+      });
+    } finally {
+      setBusyAction(null);
+      await syncState();
+      refreshBalance();
+    }
+  };
+
+  // Bot trading loop: each bot acts on its own jittered rhythm while the round is live
+  const botStateRef = useRef(
+    new Map<string, { nextAt: number; inFlight: boolean; pos: PositionDir; mem: BotMemory | null }>()
+  );
+  const botsLive =
+    isDelegated && arena?.status === "Live" && !timerExpired && seatedBots.length > 0;
+
+  useEffect(() => {
+    if (!botsLive) return;
+    const id = setInterval(() => {
+      const a = arenaRef.current;
+      if (!a || a.status !== "Live") return;
+      const now = Date.now();
+      if (now >= Number(a.endsAt) * 1000 - 300) return; // don't race the buzzer
+      for (const b of seatedBotsRef.current) {
+        const key = b.wallet.publicKey.toBase58();
+        const seat = a.players.find((s) => s.wallet.equals(b.wallet.publicKey));
+        if (!seat) continue;
+        let st = botStateRef.current.get(key);
+        if (!st) {
+          st = { nextAt: now + 500 + Math.random() * 1500, inFlight: false, pos: seat.position, mem: null };
+          botStateRef.current.set(key, st);
+        }
+        if (st.inFlight || now < st.nextAt) continue;
+        st.nextAt = now + nextBotDelayMs(b.style);
+
+        const move = decideBotMove(b.style, priceHistoryRef.current, st.pos, st.mem, now);
+        if (move === null) continue;
+
+        const state = st;
+        state.inFlight = true;
+        sendErSessionTx(
+          erConn,
+          new Transaction().add(
+            buildTapIx({
+              signer: b.session.publicKey,
+              roomId,
+              newPosition: move,
+              priceFeed: a.priceFeed,
+            })
+          ),
+          b.session
+        )
+          .then((res) => {
+            state.pos = move;
+            const hist = priceHistoryRef.current;
+            const p = hist.length ? hist[hist.length - 1].p : 0;
+            state.mem = move === POS_FLAT ? null : { enteredAt: Date.now(), entryPrice: p };
+            pushLog({
+              layer: "ER",
+              action: `${BOT_STYLE_LABEL[b.style]}: ${posLabel(move).toLowerCase()}`,
+              sig: res.signature,
+              ms: res.latencyMs,
+            });
+          })
+          .catch(() => {
+            // Resync from chain; the next tick decides again
+            const latest = arenaRef.current?.players.find((s) =>
+              s.wallet.equals(b.wallet.publicKey)
+            );
+            if (latest) state.pos = latest.position;
+          })
+          .finally(() => {
+            state.inFlight = false;
+          });
+      }
+    }, 250);
+    return () => clearInterval(id);
+  }, [botsLive, erConn, roomId, pushLog]);
+
+  // After the round: claim anything bots are owed, then send all their SOL back
+  const handleSweepBots = async () => {
+    if (!arena || !vault) return;
+    if (!connected || !publicKey) {
+      openModal();
+      return;
+    }
+    setBanner(null);
+    const winners =
+      arena.status === "Aborted" ? null : new Set(getWinningSeatIndices(arena));
+    const botsOwed = seatedBots.filter((b) => {
+      const i = arena.players.findIndex((s) => s.wallet.equals(b.wallet.publicKey));
+      return i >= 0 && (winners === null || winners.has(i)) && !isSeatClaimed(vault, i);
+    }).length;
+    setBusyAction(
+      botsOwed === 0
+        ? "Returning your bots' leftover SOL…"
+        : arena.status === "Aborted"
+          ? "Refunding your bots' stakes and returning their SOL…"
+          : "Claiming what your bots won and returning their SOL…"
+    );
+    let returned = 0;
+    try {
+      for (const b of seatedBots) {
+        const seatIndex = arena.players.findIndex((s) => s.wallet.equals(b.wallet.publicKey));
+        const owed =
+          seatIndex >= 0 &&
+          !vault.cancelled &&
+          (winners === null || winners.has(seatIndex)) &&
+          !isSeatClaimed(vault, seatIndex);
+        if (owed) {
+          const sig = await sendL1AsKeypair(
+            l1Conn,
+            new Transaction().add(
+              buildClaimPayoutIx({
+                payer: b.wallet.publicKey,
+                roomId,
+                seatIndex,
+                recipient: b.wallet.publicKey,
+              })
+            ),
+            b.wallet
+          );
+          pushLog({ layer: "L1", action: `claim_payout (${BOT_STYLE_LABEL[b.style]})`, sig });
+        }
+        const before = await l1Conn.getBalance(b.wallet.publicKey, "confirmed");
+        const sig = await sweepBot(l1Conn, b, publicKey);
+        if (sig) {
+          returned += before - 5_000;
+          pushLog({ layer: "L1", action: `return SOL (${BOT_STYLE_LABEL[b.style]})`, sig });
+        }
+      }
+      setBotsSwept(true);
+      setBanner({
+        kind: "success",
+        text:
+          returned > 0
+            ? `Returned ${fmtSol(returned / LAMPORTS_PER_SOL)} SOL from your bots.`
+            : "Your bots had nothing left to return.",
+      });
+    } catch (err: unknown) {
+      setBanner({
+        kind: "error",
+        text: err instanceof Error ? err.message : "Couldn't return the bots' SOL. Try again.",
+      });
+    } finally {
+      setBusyAction(null);
+      await syncState();
+      refreshBalance();
+    }
+  };
+
   const handleCopyInvite = () => {
     if (typeof window === "undefined") return;
     navigator.clipboard.writeText(window.location.href);
@@ -1092,7 +1352,7 @@ export default function RoomPage() {
         title = seatsOpen > 0 && arena.maxPlayers > 1 ? "Waiting for players" : "Everyone's in";
         body =
           seatsOpen > 0 && arena.maxPlayers > 1
-            ? `${seatsOpen} ${seatsOpen === 1 ? "seat is" : "seats are"} open. Send the invite link, then start when you're ready. Starting locks the seats.`
+            ? `${seatsOpen} ${seatsOpen === 1 ? "seat is" : "seats are"} open. Send the invite link, or fill seats with practice bots. Starting locks the seats.`
             : "Start the room to move the scoreboard onto MagicBlock's rollup, where every trade is instant and free.";
         actions = (
           <>
@@ -1100,6 +1360,19 @@ export default function RoomPage() {
               <button type="button" className="btn btn-lg" onClick={handleCopyInvite}>
                 {copiedLink ? <Check size={16} /> : <Link2 size={16} />}
                 {copiedLink ? "Link copied" : "Copy invite link"}
+              </button>
+            )}
+            {seatsOpen > 0 && arena.maxPlayers > 1 && (
+              <button
+                type="button"
+                id="add-bots-btn"
+                className="btn btn-lg"
+                onClick={handleAddBots}
+                disabled={!!busyAction}
+                title="Each bot gets its own wallet and pays its own stake, funded by you in one approval"
+              >
+                <Bot size={16} />
+                Add {Math.min(3, seatsOpen)} practice {Math.min(3, seatsOpen) === 1 ? "bot" : "bots"}
               </button>
             )}
             <button
@@ -1289,6 +1562,25 @@ export default function RoomPage() {
         <Link href="/" className="btn btn-primary btn-lg">
           Play again
         </Link>
+      );
+    }
+
+    if (isTerminal && seatedBots.length > 0 && !botsSwept && !vault.cancelled) {
+      const base = actions;
+      actions = (
+        <>
+          {base}
+          <button
+            type="button"
+            className="btn btn-lg"
+            onClick={handleSweepBots}
+            disabled={!!busyAction}
+            title="Claims anything your bots are owed, then sends all their SOL back to your wallet"
+          >
+            <Bot size={16} />
+            Return bot SOL to me
+          </button>
+        </>
       );
     }
 
@@ -1574,6 +1866,11 @@ export default function RoomPage() {
                           <span className="who">
                             <span className="addr">{shortKey(row.seat.wallet.toBase58())}</span>
                             {isMe && <span className="you"> You</span>}
+                            {botByWallet.has(row.seat.wallet.toBase58()) && (
+                              <span className="bot-tag">
+                                {BOT_STYLE_LABEL[botByWallet.get(row.seat.wallet.toBase58())!.style]}
+                              </span>
+                            )}
                             <br />
                             <span className={posClass(row.seat.position) === "long" ? "up" : posClass(row.seat.position) === "short" ? "down" : ""}>
                               {posLabel(row.seat.position)}
