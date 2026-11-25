@@ -1046,8 +1046,14 @@ export default function RoomPage() {
     setBanner(null);
 
     const previous = bots;
-    const fresh = createBots(count, previous);
+    // Bots funded earlier but never seated (a failed attempt) go first, so their SOL is reused
+    const seatedNow = arena.players.slice(0, arena.playerCount);
+    const reuse = previous
+      .filter((b) => !seatedNow.some((s) => s.wallet.equals(b.wallet.publicKey)))
+      .slice(0, count);
+    const fresh = createBots(count - reuse.length, previous);
     const all = [...previous, ...fresh];
+    const toSeat = [...reuse, ...fresh];
     // Persist keys before any SOL moves, so funded bots can never be lost
     saveBots(roomIdStr, all);
     setBots(all);
@@ -1055,22 +1061,29 @@ export default function RoomPage() {
     const noun = count === 1 ? "bot" : "bots";
     try {
       setBusyAction(`Funding ${count} practice ${noun}. Approve once in your wallet…`);
-      let fundSig: string;
       try {
-        fundSig = await sendL1Transaction(
-          buildBotFundingTx(publicKey, fresh, vault.entryFee)
-        );
+        const have = new Map<string, bigint>();
+        for (const b of reuse) {
+          have.set(
+            b.wallet.publicKey.toBase58(),
+            BigInt(await l1Conn.getBalance(b.wallet.publicKey, "confirmed"))
+          );
+        }
+        const fundTx = buildBotFundingTx(publicKey, toSeat, vault.entryFee, have);
+        if (fundTx.instructions.length > 0) {
+          const fundSig = await sendL1Transaction(fundTx);
+          pushLog({ layer: "L1", action: `fund ${count} practice ${noun}`, sig: fundSig });
+        }
       } catch (err) {
         // Nothing was sent: forget the unfunded bots
         saveBots(roomIdStr, previous);
         setBots(previous);
         throw err;
       }
-      pushLog({ layer: "L1", action: `fund ${count} practice ${noun}`, sig: fundSig });
 
       const seatBase = arena.playerCount;
-      for (let i = 0; i < fresh.length; i++) {
-        const b = fresh[i];
+      for (let i = 0; i < toSeat.length; i++) {
+        const b = toSeat[i];
         setBusyAction(`Seating the ${BOT_STYLE_LABEL[b.style].toLowerCase()} (${i + 1} of ${count})…`);
         const sig = await sendL1AsKeypair(
           l1Conn,
@@ -1214,8 +1227,10 @@ export default function RoomPage() {
     );
     let returned = 0;
     try {
-      for (const b of seatedBots) {
-        const seatIndex = arena.players.findIndex((s) => s.wallet.equals(b.wallet.publicKey));
+      for (const b of bots) {
+        const seatIndex = arena.players
+          .slice(0, arena.playerCount)
+          .findIndex((s) => s.wallet.equals(b.wallet.publicKey));
         const owed =
           seatIndex >= 0 &&
           !vault.cancelled &&
@@ -1682,7 +1697,7 @@ export default function RoomPage() {
       );
     }
 
-    if (isTerminal && seatedBots.length > 0 && !botsSwept && !vault.cancelled) {
+    if (isTerminal && bots.length > 0 && !botsSwept && !vault.cancelled) {
       const base = actions;
       actions = (
         <>

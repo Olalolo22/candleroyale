@@ -15,6 +15,7 @@ import {
   buildDelegateSeatIx,
   decodeArena,
   DISCRIMINATORS,
+  findSeatPda,
 } from "@sdk/codec";
 import {
   ARENA_ACCOUNT_SIZE,
@@ -149,7 +150,24 @@ export default function LobbyPage() {
         }
       }
       parsed.sort((a, b) => Number(b.arena.roomId - a.arena.roomId));
-      setRooms(parsed.slice(0, 40));
+      const recent = parsed.slice(0, 40);
+
+      // Rooms made before sealed seats existed have no seat account and can never start.
+      // Hide them unless they already finished (those still open fine as a record).
+      const seatInfos = recent.length
+        ? await l1Conn.getMultipleAccountsInfo(
+            recent.map((r) => findSeatPda(r.arena.roomId, 0)[0]),
+            "confirmed"
+          )
+        : [];
+      setRooms(
+        recent.filter(
+          (r, i) =>
+            seatInfos[i] !== null ||
+            r.arena.status === "Finished" ||
+            r.arena.status === "Aborted"
+        )
+      );
     } catch {
       // Program may not have rooms yet or RPC busy
     } finally {
