@@ -7,10 +7,10 @@ seeds = false
 skip-lint = false
 
 [programs.devnet]
-candleroyale = "3fgXDqKzQiQQUSfbPXnyuonqJi8BMbeGf9vnxxH9bEtN"
+candleroyale = "72pppjfTWKZ9GQARXtt2dkB4t8VNDaL5gA84MajAUXFS"
 
 [programs.localnet]
-candleroyale = "3fgXDqKzQiQQUSfbPXnyuonqJi8BMbeGf9vnxxH9bEtN"
+candleroyale = "72pppjfTWKZ9GQARXtt2dkB4t8VNDaL5gA84MajAUXFS"
 
 [registry]
 url = "https://api.apr.dev"

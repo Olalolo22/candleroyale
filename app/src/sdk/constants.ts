@@ -2,7 +2,7 @@ import { PublicKey } from "@solana/web3.js";
 
 export const CANDLEROYALE_PROGRAM_ID = new PublicKey(
   process.env.NEXT_PUBLIC_PROGRAM_ID ||
-    "3fgXDqKzQiQQUSfbPXnyuonqJi8BMbeGf9vnxxH9bEtN"
+    "72pppjfTWKZ9GQARXtt2dkB4t8VNDaL5gA84MajAUXFS"
 );
 
 export const DELEGATION_PROGRAM_ID = new PublicKey(
