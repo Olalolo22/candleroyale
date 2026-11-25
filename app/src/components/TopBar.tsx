@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Check,
@@ -54,6 +54,28 @@ export function TopBar({ erSlot }: { erSlot?: number | null }) {
   const [connectErr, setConnectErr] = useState<string | null>(null);
   const [copiedAddr, setCopiedAddr] = useState(false);
 
+  // Rollup heartbeat: live while new blocks keep arriving, stale after 6s of silence
+  const lastSlotRef = useRef<number | null>(null);
+  const lastSlotAtRef = useRef(0);
+  const [everConnected, setEverConnected] = useState(false);
+  const [rollupLive, setRollupLive] = useState(false);
+  useEffect(() => {
+    if (erSlot && erSlot !== lastSlotRef.current) {
+      lastSlotRef.current = erSlot;
+      lastSlotAtRef.current = Date.now();
+      setEverConnected(true);
+      setRollupLive(true);
+    }
+  }, [erSlot]);
+  useEffect(() => {
+    const id = setInterval(() => {
+      setRollupLive(
+        lastSlotRef.current !== null && Date.now() - lastSlotAtRef.current < 6000
+      );
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+
   // Escape closes the wallet sheet
   useEffect(() => {
     if (!modalOpen) return;
@@ -101,14 +123,18 @@ export function TopBar({ erSlot }: { erSlot?: number | null }) {
             rel="noreferrer"
             className="net-status"
             title={
-              erSlot
-                ? `MagicBlock rollup is live at slot ${erSlot.toLocaleString()}`
-                : "Connecting to the MagicBlock rollup"
+              rollupLive && erSlot
+                ? `Rollup block ${erSlot.toLocaleString()}, updated every second`
+                : "Waiting for MagicBlock's rollup to respond"
             }
           >
-            <span className={`net-dot ${erSlot ? "" : "stale"}`} />
+            <span className={`net-dot ${rollupLive ? "" : "stale"}`} />
             <span className="net-label">
-              {erSlot ? `Devnet slot ${erSlot.toLocaleString()}` : "Connecting…"}
+              {rollupLive
+                ? "Live on MagicBlock"
+                : everConnected
+                  ? "Reconnecting…"
+                  : "Connecting…"}
             </span>
           </a>
 
