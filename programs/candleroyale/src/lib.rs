@@ -79,7 +79,7 @@ pub mod candleroyale {
     /// ER: Close all open positions deterministically (3s oracle grace window or frozen last_price), compute tie mask, and commit & undelegate back to L1.
     /// remaining_accounts: every seat PDA in order (revealed and undelegated with the Arena).
     pub fn finish_round<'info>(
-        ctx: Context<'_, '_, 'info, 'info, FinishRound<'info>>,
+        ctx: Context<'info, FinishRound<'info>>,
         room_id: u64,
     ) -> Result<()> {
         instructions::finish_round::handle_finish_round(ctx, room_id)

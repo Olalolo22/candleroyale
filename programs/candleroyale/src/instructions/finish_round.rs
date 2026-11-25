@@ -51,7 +51,7 @@ pub fn resolve_closing_price(
 }
 
 pub fn handle_finish_round<'info>(
-    ctx: Context<'_, '_, 'info, 'info, FinishRound<'info>>,
+    ctx: Context<'info, FinishRound<'info>>,
     room_id: u64,
 ) -> Result<()> {
     let clock = Clock::get()?;
