@@ -9,10 +9,22 @@ export const viewport: Viewport = {
   viewportFit: "cover",
 };
 
+const SITE_DESCRIPTION =
+  "60-second trading battles for up to six players. Pick long or short on live SOL, BTC or ETH; the best score takes the pot. Gasless trades on MagicBlock, stakes on Solana Devnet.";
+
 export const metadata: Metadata = {
-  title: "CandleRoyale — 60s PvP Micro-Trading Arena on Solana",
-  description:
-    "2–6 players escrow SOL on Solana L1, battle for 60 seconds with gasless sub-50ms taps on MagicBlock Ephemeral Rollups and live Pyth Lazer feeds, and settle winner-take-all on L1.",
+  title: {
+    default: "CandleRoyale: 60-second trading battles on Solana",
+    template: "%s | CandleRoyale",
+  },
+  description: SITE_DESCRIPTION,
+  openGraph: {
+    title: "CandleRoyale: 60-second trading battles on Solana",
+    description: SITE_DESCRIPTION,
+    siteName: "CandleRoyale",
+    type: "website",
+  },
+  twitter: { card: "summary_large_image" },
 };
 
 export default function RootLayout({
