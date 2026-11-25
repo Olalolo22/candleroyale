@@ -2,11 +2,12 @@ use anchor_lang::prelude::*;
 use anchor_lang::system_program::{self, Transfer};
 
 use crate::constants::{
-    ARENA_SEED, MAX_DURATION_SECS, MAX_PLAYERS, MIN_DURATION_SECS, NO_WINNER, POS_FLAT, VAULT_SEED,
+    ARENA_SEED, MAX_DURATION_SECS, MAX_PLAYERS, MIN_DURATION_SECS, NO_WINNER, POS_FLAT, SEAT_SEED,
+    VAULT_SEED,
 };
 use crate::errors::CandleRoyaleError;
 use crate::oracle::is_supported_feed;
-use crate::state::{Arena, ArenaStatus, PlayerSeat, Vault};
+use crate::state::{seat_permission_rent, Arena, ArenaStatus, PlayerSeat, SeatPosition, Vault};
 
 #[derive(Accounts)]
 #[instruction(room_id: u64)]
@@ -31,6 +32,17 @@ pub struct CreateRoom<'info> {
         bump,
     )]
     pub arena: Account<'info, Arena>,
+
+    /// Creator's private position account (seat 0). Delegated to the TEE ER by `delegate_seat`
+    /// in the same transaction, and sealed on the creator's first trade.
+    #[account(
+        init,
+        payer = creator,
+        space = SeatPosition::SPACE,
+        seeds = [SEAT_SEED, &room_id.to_le_bytes(), &0u8.to_le_bytes()],
+        bump,
+    )]
+    pub seat: Account<'info, SeatPosition>,
 
     pub system_program: Program<'info, System>,
 }
@@ -111,6 +123,28 @@ pub fn handle_create_room(
         last_tap_ts: 0,
     };
     arena.bump = ctx.bumps.arena;
+
+    let seat = &mut ctx.accounts.seat;
+    seat.room_id = room_id;
+    seat.seat_index = 0;
+    seat.wallet = ctx.accounts.creator.key();
+    seat.session_key = session_key;
+    seat.position = POS_FLAT;
+    seat.entry_price = 0;
+    seat.sealed = false;
+    seat.bump = ctx.bumps.seat;
+
+    // Pre-fund the seat so it can pay its own ephemeral permission rent on the TEE ER.
+    system_program::transfer(
+        CpiContext::new(
+            ctx.accounts.system_program.key(),
+            Transfer {
+                from: ctx.accounts.creator.to_account_info(),
+                to: ctx.accounts.seat.to_account_info(),
+            },
+        ),
+        seat_permission_rent(),
+    )?;
 
     emit!(RoomCreated {
         room_id,

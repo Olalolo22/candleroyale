@@ -2,10 +2,10 @@ use anchor_lang::prelude::*;
 use ephemeral_rollups_sdk::anchor::commit;
 use ephemeral_rollups_sdk::ephem::{FoldableIntentBuilder, MagicIntentBundleBuilder};
 
-use crate::constants::{ARENA_SEED, POS_FLAT, SETTLE_GRACE_SECS};
+use crate::constants::{ARENA_SEED, SEAT_SEED, SETTLE_GRACE_SECS};
 use crate::errors::CandleRoyaleError;
 use crate::oracle::read_er_price;
-use crate::state::{compute_pnl_delta, Arena, ArenaStatus};
+use crate::state::{compute_pnl_delta, Arena, ArenaStatus, SeatPosition};
 
 #[commit]
 #[derive(Accounts)]
@@ -50,7 +50,10 @@ pub fn resolve_closing_price(
     Ok(last_price)
 }
 
-pub fn handle_finish_round(ctx: Context<FinishRound>, room_id: u64) -> Result<()> {
+pub fn handle_finish_round<'info>(
+    ctx: Context<'_, '_, 'info, 'info, FinishRound<'info>>,
+    room_id: u64,
+) -> Result<()> {
     let clock = Clock::get()?;
     let now = clock.unix_timestamp;
 
@@ -84,15 +87,49 @@ pub fn handle_finish_round(ctx: Context<FinishRound>, room_id: u64) -> Result<()
         let count = arena.player_count as usize;
         let mut best_pnl: i64 = i64::MIN;
 
+        // The reveal: remaining_accounts = [seat_0, .., seat_{n-1}] (the sealed positions).
+        // Each open position closes at the closing price into realized_pnl, and the position
+        // held at the buzzer is written into the public scoreboard so everyone can see it.
+        require!(
+            ctx.remaining_accounts.len() == count,
+            CandleRoyaleError::MissingSeatAccounts
+        );
+        let room_id_bytes = room_id.to_le_bytes();
         for idx in 0..count {
+            let seat_info = &ctx.remaining_accounts[idx];
+            let (seat_pda, _) = Pubkey::find_program_address(
+                &[SEAT_SEED, room_id_bytes.as_ref(), &(idx as u8).to_le_bytes()],
+                &crate::ID,
+            );
+            require_keys_eq!(
+                seat_info.key(),
+                seat_pda,
+                CandleRoyaleError::InvalidSeatAccount
+            );
+            require_keys_eq!(
+                *seat_info.owner,
+                crate::ID,
+                CandleRoyaleError::InvalidSeatAccount
+            );
+            let sealed = {
+                let data = seat_info.try_borrow_data()?;
+                SeatPosition::try_deserialize(&mut &data[..])
+                    .map_err(|_| error!(CandleRoyaleError::InvalidSeatAccount))?
+            };
+            require!(
+                sealed.room_id == room_id && sealed.seat_index as usize == idx,
+                CandleRoyaleError::InvalidSeatAccount
+            );
+
             let seat = &mut arena.players[idx];
-            let delta = compute_pnl_delta(seat.position, seat.entry_price, closing_price)?;
+            let delta = compute_pnl_delta(sealed.position, sealed.entry_price, closing_price)?;
             seat.realized_pnl = seat
                 .realized_pnl
                 .checked_add(delta)
                 .ok_or(CandleRoyaleError::MathOverflow)?;
-            seat.position = POS_FLAT;
-            seat.entry_price = 0;
+            // Revealed: the position (and its entry) held at the buzzer, now closed.
+            seat.position = sealed.position;
+            seat.entry_price = sealed.entry_price;
 
             if idx == 0 || seat.realized_pnl > best_pnl {
                 best_pnl = seat.realized_pnl;
@@ -130,12 +167,17 @@ pub fn handle_finish_round(ctx: Context<FinishRound>, room_id: u64) -> Result<()
     // Flush mutated Arena bytes BEFORE commit_and_undelegate so ER snapshots the final state.
     ctx.accounts.arena.exit(&crate::ID)?;
 
+    // Commit & undelegate the scoreboard and every sealed seat back to Solana L1.
+    let mut to_undelegate: Vec<AccountInfo> = Vec::with_capacity(1 + ctx.remaining_accounts.len());
+    to_undelegate.push(ctx.accounts.arena.to_account_info());
+    to_undelegate.extend(ctx.remaining_accounts.iter().cloned());
+
     MagicIntentBundleBuilder::new(
         ctx.accounts.payer.to_account_info(),
         ctx.accounts.magic_context.to_account_info(),
         ctx.accounts.magic_program.to_account_info(),
     )
-    .commit_and_undelegate(&[ctx.accounts.arena.to_account_info()])
+    .commit_and_undelegate(&to_undelegate)
     .build_and_invoke()?;
 
     emit!(RoundFinished {

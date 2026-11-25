@@ -37,9 +37,21 @@ pub mod candleroyale {
         )
     }
 
-    /// L1: Join an open Lobby room, escrow entry fee in Vault PDA, and bind a unique ephemeral session key.
-    pub fn join_room(ctx: Context<JoinRoom>, room_id: u64, session_key: Pubkey) -> Result<()> {
-        instructions::join_room::handle_join_room(ctx, room_id, session_key)
+    /// L1: Join an open Lobby room, escrow entry fee in Vault PDA, bind a unique ephemeral session key,
+    /// and create the player's private seat account (seat_index must be the next free seat).
+    pub fn join_room(
+        ctx: Context<JoinRoom>,
+        room_id: u64,
+        session_key: Pubkey,
+        seat_index: u8,
+    ) -> Result<()> {
+        instructions::join_room::handle_join_room(ctx, room_id, session_key, seat_index)
+    }
+
+    /// L1: Delegate a player's private seat to the pinned MagicBlock Private ER (TEE). Sent in the
+    /// same transaction as create_room / join_room.
+    pub fn delegate_seat(ctx: Context<DelegateSeat>, room_id: u64, seat_index: u8) -> Result<()> {
+        instructions::delegate_seat::handle_delegate_seat(ctx, room_id, seat_index)
     }
 
     /// L1: Cancel an unstarted solo Lobby room and refund the creator's entry fee.
@@ -47,7 +59,8 @@ pub mod candleroyale {
         instructions::cancel_room::handle_cancel_room(ctx, room_id)
     }
 
-    /// L1: Creator delegates the Arena PDA to the pinned MagicBlock ER validator for sub-50ms gasless trading.
+    /// L1: Creator delegates the Arena PDA to the pinned MagicBlock Private ER (TEE) validator.
+    /// remaining_accounts: every seat PDA in order, each already delegated.
     pub fn start_and_delegate(ctx: Context<StartAndDelegate>, room_id: u64) -> Result<()> {
         instructions::start_and_delegate::handle_start_and_delegate(ctx, room_id)
     }
@@ -58,12 +71,17 @@ pub mod candleroyale {
     }
 
     /// ER: Execute an instant, gasless position flip (LONG / FLAT / SHORT) signed by the player's Session Key.
+    /// The position is written only to the player's sealed seat; the first tap seals it.
     pub fn tap(ctx: Context<Tap>, room_id: u64, new_position: i8) -> Result<()> {
         instructions::tap::handle_tap(ctx, room_id, new_position)
     }
 
     /// ER: Close all open positions deterministically (3s oracle grace window or frozen last_price), compute tie mask, and commit & undelegate back to L1.
-    pub fn finish_round(ctx: Context<FinishRound>, room_id: u64) -> Result<()> {
+    /// remaining_accounts: every seat PDA in order (revealed and undelegated with the Arena).
+    pub fn finish_round<'info>(
+        ctx: Context<'_, '_, 'info, 'info, FinishRound<'info>>,
+        room_id: u64,
+    ) -> Result<()> {
         instructions::finish_round::handle_finish_round(ctx, room_id)
     }
 
@@ -134,6 +152,26 @@ mod layout_tests {
 
         assert_eq!(Vault::DISCRIMINATOR.len(), 8);
         assert_eq!(Arena::DISCRIMINATOR.len(), 8);
+    }
+
+    #[test]
+    fn test_sealed_seat_exact_byte_size() {
+        use crate::state::SeatPosition;
+        let seat = SeatPosition {
+            room_id: 1,
+            seat_index: 5,
+            wallet: Pubkey::default(),
+            session_key: Pubkey::default(),
+            position: -1,
+            entry_price: 7_000_000_000,
+            sealed: true,
+            bump: 254,
+        };
+        let mut bytes = Vec::new();
+        seat.try_serialize(&mut bytes).unwrap();
+        assert_eq!(bytes.len(), SeatPosition::SPACE);
+        assert_eq!(SeatPosition::SPACE, 92);
+        assert_eq!(SeatPosition::DISCRIMINATOR.len(), 8);
     }
 
     #[test]
