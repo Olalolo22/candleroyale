@@ -1622,7 +1622,7 @@ export default function RoomPage() {
           {/* ── Room bar ─────────────────────────────────────────── */}
           <div className="room-bar">
             <div className="room-bar-left">
-              <Link href="/" className="btn btn-quiet btn-icon" aria-label="Back to rooms">
+              <Link href="/" className="btn btn-quiet btn-icon" aria-label="Back to rooms" title="Back to rooms">
                 <ArrowLeft size={18} />
               </Link>
               <h1 className="room-heading">
@@ -1679,6 +1679,7 @@ export default function RoomPage() {
                   style={{ width: 28, height: 28 }}
                   onClick={() => setBanner(null)}
                   aria-label="Dismiss message"
+                  title="Dismiss"
                 >
                   <X size={14} />
                 </button>

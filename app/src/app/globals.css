@@ -300,6 +300,20 @@ button {
   font-size: var(--t-xs);
 }
 
+/* Icon buttons stay square at any size: .btn-sm's side padding used to
+   squeeze their icons down to a few pixels */
+.btn.btn-icon {
+  padding: 0;
+}
+
+.btn.btn-icon.btn-sm {
+  width: 32px;
+}
+
+.btn svg {
+  flex-shrink: 0;
+}
+
 .btn-lg {
   height: 52px;
   padding: 0 24px;

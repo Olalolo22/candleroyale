@@ -146,6 +146,7 @@ export function TopBar({ erSlot }: { erSlot?: number | null }) {
             className="btn btn-quiet btn-icon sfx-btn"
             onClick={() => setSfxOn(pitAudio.toggle())}
             aria-label={sfxOn ? "Mute sound effects" : "Turn on sound effects"}
+            title={sfxOn ? "Mute sound effects" : "Turn on sound effects"}
             aria-pressed={sfxOn}
           >
             {sfxOn ? <Volume2 size={17} /> : <VolumeX size={17} />}
@@ -167,20 +168,20 @@ export function TopBar({ erSlot }: { erSlot?: number | null }) {
               <button
                 type="button"
                 className="btn btn-quiet btn-icon btn-sm copy-btn"
-                style={{ width: 30 }}
                 onClick={handleCopy}
-                aria-label="Copy wallet address"
+                aria-label={copiedAddr ? "Address copied" : "Copy wallet address"}
+                title={copiedAddr ? "Address copied" : "Copy wallet address"}
               >
-                {copiedAddr ? <Check size={14} color="#2bd67b" /> : <Copy size={14} />}
+                {copiedAddr ? <Check size={16} color="#2bd67b" /> : <Copy size={16} />}
               </button>
               <button
                 type="button"
                 className="btn btn-quiet btn-icon btn-sm"
-                style={{ width: 30 }}
                 onClick={() => disconnect()}
                 aria-label={`Disconnect ${walletLabel ?? "wallet"}`}
+                title={`Disconnect ${walletLabel ?? "wallet"}`}
               >
-                <LogOut size={14} />
+                <LogOut size={16} />
               </button>
             </div>
           ) : (
