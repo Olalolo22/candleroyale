@@ -1089,11 +1089,21 @@ export default function RoomPage() {
       return;
     }
     setBanner(null);
-    setBusyAction("Collecting bot winnings and returning their SOL to you…");
+    const winners =
+      arena.status === "Aborted" ? null : new Set(getWinningSeatIndices(arena));
+    const botsOwed = seatedBots.filter((b) => {
+      const i = arena.players.findIndex((s) => s.wallet.equals(b.wallet.publicKey));
+      return i >= 0 && (winners === null || winners.has(i)) && !isSeatClaimed(vault, i);
+    }).length;
+    setBusyAction(
+      botsOwed === 0
+        ? "Returning your bots' leftover SOL…"
+        : arena.status === "Aborted"
+          ? "Refunding your bots' stakes and returning their SOL…"
+          : "Claiming what your bots won and returning their SOL…"
+    );
     let returned = 0;
     try {
-      const winners =
-        arena.status === "Aborted" ? null : new Set(getWinningSeatIndices(arena));
       for (const b of seatedBots) {
         const seatIndex = arena.players.findIndex((s) => s.wallet.equals(b.wallet.publicKey));
         const owed =
