@@ -166,6 +166,18 @@ button {
   font-weight: 800;
 }
 
+.net-tag {
+  align-self: center;
+  margin-left: 2px;
+  padding: 2px 7px;
+  border-radius: var(--r-chip);
+  border: 1px solid var(--rail-strong);
+  color: var(--slate);
+  font-size: var(--t-xs);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
 .topbar-right {
   display: flex;
   align-items: center;
@@ -1667,6 +1679,16 @@ fieldset {
   font-size: var(--t-sm);
 }
 
+.modal-note {
+  margin: -6px 0 16px;
+  padding: 10px 12px;
+  border-radius: var(--r-control);
+  background: var(--well);
+  color: var(--slate);
+  font-size: var(--t-xs);
+  line-height: 1.5;
+}
+
 .wallet-list {
   display: flex;
   flex-direction: column;
@@ -1845,6 +1867,23 @@ fieldset {
   }
   .clock {
     font-size: 4.5rem;
+  }
+}
+
+/* Narrow phones: keep the Devnet tag; the phone's silent switch covers sound */
+@media (max-width: 480px) {
+  .topbar .sfx-btn {
+    display: none;
+  }
+  .brand {
+    gap: 7px;
+  }
+  .brand-name {
+    font-size: 1.35rem;
+  }
+  .net-tag {
+    padding: 1px 5px;
+    font-size: 10px;
   }
 }
 

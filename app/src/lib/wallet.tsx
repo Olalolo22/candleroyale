@@ -23,9 +23,11 @@ export interface BrowserSolanaProvider {
   isSolflare?: boolean;
   isBackpack?: boolean;
   publicKey?: { toBase58(): string };
+  // Phantom resolves to { publicKey }; Solflare resolves to `true` and only
+  // sets provider.publicKey. Read the key through connectedKey() below.
   connect(opts?: {
     onlyIfTrusted?: boolean;
-  }): Promise<{ publicKey: { toBase58(): string } }>;
+  }): Promise<{ publicKey?: { toBase58(): string } } | boolean | void>;
   disconnect(): Promise<void>;
   signTransaction<T extends Transaction | VersionedTransaction>(tx: T): Promise<T>;
   signAndSendTransaction?(
@@ -99,6 +101,18 @@ export function useWallet() {
   return ctx;
 }
 
+/** The connected address, whichever way this wallet reports it. */
+function connectedKey(
+  provider: BrowserSolanaProvider,
+  res: unknown
+): { toBase58(): string } | null {
+  if (res && typeof res === "object" && "publicKey" in res) {
+    const pk = (res as { publicKey?: { toBase58(): string } }).publicKey;
+    if (pk) return pk;
+  }
+  return provider.publicKey ?? null;
+}
+
 function getInjectedProvider(
   kind: Exclude<WalletKind, "burner">
 ): BrowserSolanaProvider | null {
@@ -157,8 +171,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     provider
       .connect({ onlyIfTrusted: true })
       .then((res) => {
-        if (res?.publicKey) {
-          setPublicKey(new PublicKey(res.publicKey.toBase58()));
+        const key = connectedKey(provider, res);
+        if (key) {
+          setPublicKey(new PublicKey(key.toBase58()));
           setWalletKind("phantom");
         }
       })
@@ -184,7 +199,13 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         );
       }
       const res = await provider.connect();
-      const pk = new PublicKey(res.publicKey.toBase58());
+      const key = connectedKey(provider, res);
+      if (!key) {
+        throw new Error(
+          `${kind[0].toUpperCase() + kind.slice(1)} connected but didn't share an address. Unlock the wallet and try again.`
+        );
+      }
+      const pk = new PublicKey(key.toBase58());
       setPublicKey(pk);
       setWalletKind(kind);
       setModalOpen(false);
