@@ -26,6 +26,7 @@ import {
   Crown,
   ExternalLink,
   Link2,
+  Lock,
   Minus,
   Play,
   RotateCcw,
@@ -35,11 +36,11 @@ import { TopBar } from "@/components/TopBar";
 import { CandleCanvas, TapMarker } from "@/components/CandleCanvas";
 import { useWallet } from "@/lib/wallet";
 import {
-  createErConnection,
   getOrCreateSessionKey,
   loadExistingSessionKey,
   sendErSessionTx,
 } from "@/lib/session";
+import { getTeeConnection, getViewerConnection } from "@/lib/tee";
 import { useOracleStream } from "@/lib/useOracleStream";
 import { pitAudio } from "@/lib/audio";
 import {
@@ -72,25 +73,28 @@ import {
   buildBeginRoundIx,
   buildCancelRoomIx,
   buildClaimPayoutIx,
+  buildDelegateSeatIx,
   buildFinishRoundIx,
   buildJoinRoomIx,
   buildStartAndDelegateIx,
   buildTapIx,
   decodeArena,
+  decodeSeatPosition,
   decodeVault,
   findArenaPda,
+  findSeatPda,
   findVaultPda,
   formatPnlPct,
   getWinningSeatIndices,
   isSeatClaimed,
   PlayerSeat,
+  SealedSeat,
   totalSeatPnl,
   VaultAccount,
 } from "@sdk/codec";
 import {
   CANDLEROYALE_PROGRAM_ID,
   DELEGATION_PROGRAM_ID,
-  ER_VALIDATOR_PUBKEY,
   MARKET_FEEDS,
   marketFromFeed,
   POS_FLAT,
@@ -138,7 +142,6 @@ export default function RoomPage() {
   } = useWallet();
 
   const l1Conn = useMemo(() => new Connection(SOLANA_L1_RPC, "confirmed"), []);
-  const erConn = useMemo(() => createErConnection(), []);
 
   const [vaultPda] = useMemo(
     () => (validRoomId ? findVaultPda(roomId) : [PublicKey.default, 0]),
@@ -150,7 +153,10 @@ export default function RoomPage() {
   );
 
   const [vault, setVault] = useState<VaultAccount | null>(null);
-  const [arena, setArena] = useState<ArenaAccount | null>(null);
+  // The public scoreboard as the chain has it. Mid-round it holds banked scores only.
+  const [rawArena, setRawArena] = useState<ArenaAccount | null>(null);
+  // This player's own sealed position, read from the private rollup with their session key.
+  const [mySealed, setMySealed] = useState<SealedSeat | null>(null);
   const [isDelegated, setIsDelegated] = useState(false);
   const [loadingRoom, setLoadingRoom] = useState(true);
   const [notFound, setNotFound] = useState(false);
@@ -159,6 +165,9 @@ export default function RoomPage() {
   const [tapping, setTapping] = useState(false);
   const [pendingDir, setPendingDir] = useState<PositionDir | null>(null);
   const [showVictory, setShowVictory] = useState(false);
+  // The buzzer reveal: a short beat where sealed positions flip open before the result card
+  const [revealing, setRevealing] = useState(false);
+  const revealedRef = useRef(false);
   const sawLiveRef = useRef(false);
   const victoryDismissedRef = useRef(false);
   const autoSettledRef = useRef(false);
@@ -174,7 +183,7 @@ export default function RoomPage() {
   const lastUrgentSecRef = useRef<number>(-1);
   const victoryPlayedRef = useRef(false);
 
-  const feedAddress = arena?.priceFeed ?? MARKET_FEEDS.SOL.address;
+  const feedAddress = rawArena?.priceFeed ?? MARKET_FEEDS.SOL.address;
   const market = useMemo(() => marketFromFeed(feedAddress), [feedAddress]);
   const {
     latest: oracleTick,
@@ -216,31 +225,33 @@ export default function RoomPage() {
       setIsDelegated(delegatedNow);
 
       if (delegatedNow) {
-        const erArenaInfo = await erConn.getAccountInfo(arenaPda, "confirmed");
+        const viewer = await getViewerConnection();
+        const erArenaInfo = await viewer.getAccountInfo(arenaPda, "confirmed");
         if (erArenaInfo) {
-          setArena(decodeArena(erArenaInfo.data));
+          setRawArena(decodeArena(erArenaInfo.data));
         }
       } else if (l1ArenaInfo.owner.equals(CANDLEROYALE_PROGRAM_ID)) {
-        setArena(decodeArena(l1ArenaInfo.data));
+        setRawArena(decodeArena(l1ArenaInfo.data));
       }
       setLoadingRoom(false);
     } catch {
       // keep existing state on transient RPC error
     }
-  }, [validRoomId, l1Conn, erConn, vaultPda, arenaPda]);
+  }, [validRoomId, l1Conn, vaultPda, arenaPda]);
 
   // Fast ER-only arena refresh during delegated gameplay
   const syncErArena = useCallback(async () => {
     if (!validRoomId) return;
     try {
-      const erArenaInfo = await erConn.getAccountInfo(arenaPda, "confirmed");
+      const viewer = await getViewerConnection();
+      const erArenaInfo = await viewer.getAccountInfo(arenaPda, "confirmed");
       if (erArenaInfo) {
-        setArena(decodeArena(erArenaInfo.data));
+        setRawArena(decodeArena(erArenaInfo.data));
       }
     } catch {
       // ignore transient ER poll blip
     }
-  }, [validRoomId, erConn, arenaPda]);
+  }, [validRoomId, arenaPda]);
 
   useEffect(() => {
     syncState();
@@ -261,21 +272,73 @@ export default function RoomPage() {
   }, []);
 
   const mySeatIndex = useMemo(() => {
-    if (!arena || !publicKey) return -1;
-    return arena.players.findIndex((p) => p.wallet.equals(publicKey));
-  }, [arena, publicKey]);
+    if (!rawArena || !publicKey) return -1;
+    return rawArena.players
+      .slice(0, rawArena.playerCount)
+      .findIndex((p) => p.wallet.equals(publicKey));
+  }, [rawArena, publicKey]);
+
+  const mySessionKeyStr =
+    rawArena && mySeatIndex >= 0
+      ? rawArena.players[mySeatIndex].sessionKey.toBase58()
+      : null;
+
+  const activeSessionKey: Keypair | null = useMemo(() => {
+    if (!publicKey || !mySessionKeyStr || !validRoomId) return null;
+    const loaded = loadExistingSessionKey(roomIdStr, publicKey.toBase58());
+    if (loaded && loaded.publicKey.toBase58() === mySessionKeyStr) {
+      return loaded;
+    }
+    return null;
+  }, [publicKey, mySessionKeyStr, validRoomId, roomIdStr]);
+
+  // Read my own sealed seat. Only my session key (or wallet) can see it on the private rollup.
+  const syncMySeat = useCallback(async () => {
+    if (!activeSessionKey || mySeatIndex < 0 || !validRoomId) return;
+    try {
+      const conn = await getTeeConnection(activeSessionKey);
+      const [seatPda] = findSeatPda(roomId, mySeatIndex);
+      const info = await conn.getAccountInfo(seatPda, "confirmed");
+      const sealed = info ? decodeSeatPosition(info.data) : null;
+      if (sealed) setMySealed(sealed);
+    } catch {
+      // keep last known position on a transient blip
+    }
+  }, [activeSessionKey, mySeatIndex, validRoomId, roomId]);
+
+  useEffect(() => {
+    if (!isDelegated || !activeSessionKey) return;
+    syncMySeat();
+    const t = setInterval(syncMySeat, 400);
+    return () => clearInterval(t);
+  }, [isDelegated, activeSessionKey, syncMySeat]);
+
+  // What this tab shows: the public scoreboard, with my own sealed position laid over my
+  // seat until the buzzer. After settlement the chain holds everyone's revealed position.
+  const arena: ArenaAccount | null = useMemo(() => {
+    if (!rawArena) return null;
+    if (
+      rawArena.status === "Finished" ||
+      rawArena.status === "Aborted" ||
+      !mySealed ||
+      mySeatIndex < 0
+    ) {
+      return rawArena;
+    }
+    const players = rawArena.players.slice();
+    players[mySeatIndex] = {
+      ...players[mySeatIndex],
+      position: mySealed.position,
+      entryPrice: mySealed.entryPrice,
+    };
+    return { ...rawArena, players };
+  }, [rawArena, mySealed, mySeatIndex]);
 
   const mySeat: PlayerSeat | null =
     arena && mySeatIndex >= 0 ? arena.players[mySeatIndex] : null;
 
-  const activeSessionKey: Keypair | null = useMemo(() => {
-    if (!publicKey || !mySeat || !validRoomId) return null;
-    const loaded = loadExistingSessionKey(roomIdStr, publicKey.toBase58());
-    if (loaded && loaded.publicKey.equals(mySeat.sessionKey)) {
-      return loaded;
-    }
-    return null;
-  }, [publicKey, mySeat, validRoomId, roomIdStr]);
+  // Mid-round, other players' positions are sealed: only their banked score is public.
+  const isSealedRound = !!arena && isDelegated && arena.status !== "Finished" && arena.status !== "Aborted";
 
   const remainingSec = useMemo(() => {
     if (!arena) return 0;
@@ -382,13 +445,17 @@ export default function RoomPage() {
       .map((seat, idx) => ({
         seat,
         seatIndex: idx,
-        livePnl: isTerminal ? seat.realizedPnl : totalSeatPnl(seat, liveRaw),
+        // Others: banked score only (their open trade is sealed). Me: banked + my open trade.
+        livePnl:
+          isTerminal || idx !== mySeatIndex
+            ? seat.realizedPnl
+            : totalSeatPnl(seat, liveRaw),
       }))
       .sort((a, b) => {
         if (b.livePnl !== a.livePnl) return b.livePnl > a.livePnl ? 1 : -1;
         return a.seatIndex - b.seatIndex;
       });
-  }, [arena, isTerminal, oracleTick]);
+  }, [arena, isTerminal, oracleTick, mySeatIndex]);
 
   // Sign ER tx with 0-popup Session Key when available, else fall back to connected wallet
   const dispatchErTx = useCallback(
@@ -396,18 +463,21 @@ export default function RoomPage() {
       if (activeSessionKey) {
         const ix = buildIx(activeSessionKey.publicKey);
         return sendErSessionTx(
-          erConn,
+          await getTeeConnection(activeSessionKey),
           new Transaction().add(ix),
           activeSessionKey
         );
       }
       if (publicKey) {
         const ix = buildIx(publicKey);
-        return sendErWalletTransaction(erConn, new Transaction().add(ix));
+        return sendErWalletTransaction(
+          await getViewerConnection(),
+          new Transaction().add(ix)
+        );
       }
       throw new Error("Connect a Solana Devnet wallet first.");
     },
-    [activeSessionKey, publicKey, erConn, sendErWalletTransaction]
+    [activeSessionKey, publicKey, sendErWalletTransaction]
   );
 
   // ─── Actions ──────────────────────────────────────────────────────────────
@@ -421,12 +491,18 @@ export default function RoomPage() {
     setBusyAction("Joining. Approve the stake in your wallet…");
     try {
       const sk = getOrCreateSessionKey(roomIdStr, publicKey.toBase58());
-      const ix = buildJoinRoomIx({
-        player: publicKey,
-        roomId,
-        sessionKey: sk.publicKey,
-      });
-      const sig = await sendL1Transaction(new Transaction().add(ix));
+      const seatIndex = rawArena?.playerCount ?? 0;
+      const tx = new Transaction().add(
+        buildJoinRoomIx({
+          player: publicKey,
+          roomId,
+          sessionKey: sk.publicKey,
+          seatIndex,
+        }),
+        // Hand the new private seat to MagicBlock's private rollup in the same transaction
+        buildDelegateSeatIx({ payer: publicKey, roomId, seatIndex })
+      );
+      const sig = await sendL1Transaction(tx);
       pushLog({ layer: "L1", action: "join_room", sig });
       setBanner({
         kind: "success",
@@ -512,7 +588,7 @@ export default function RoomPage() {
       const ix = buildStartAndDelegateIx({
         payer: publicKey,
         roomId,
-        validator: ER_VALIDATOR_PUBKEY,
+        playerCount: rawArena?.playerCount ?? 0,
       });
       const sig = await sendL1Transaction(new Transaction().add(ix));
       pushLog({ layer: "L1", action: "start_and_delegate", sig });
@@ -525,7 +601,8 @@ export default function RoomPage() {
       // Wait briefly for ER validator pickup
       for (let i = 0; i < 15; i++) {
         await new Promise((r) => setTimeout(r, 700));
-        const info = await erConn.getAccountInfo(arenaPda, "confirmed");
+        const viewer = await getViewerConnection();
+        const info = await viewer.getAccountInfo(arenaPda, "confirmed");
         if (info) break;
       }
 
@@ -618,6 +695,7 @@ export default function RoomPage() {
             roomId,
             newPosition: dir,
             priceFeed: arena.priceFeed,
+            seatIndex: mySeatIndex,
           })
         );
 
@@ -637,7 +715,18 @@ export default function RoomPage() {
           priceUsd: priceNow,
         });
 
-        await syncErArena();
+        // Show the new position right away; the next private read confirms it
+        setMySealed((prev) =>
+          prev
+            ? {
+                ...prev,
+                position: dir,
+                entryPrice: dir === POS_FLAT ? 0n : oracleTick?.rawPrice ?? prev.entryPrice,
+                sealed: true,
+              }
+            : prev
+        );
+        await Promise.all([syncErArena(), syncMySeat()]);
       } catch (err: unknown) {
         setBanner({
           kind: "error",
@@ -665,6 +754,8 @@ export default function RoomPage() {
       oracleTick,
       pushLog,
       syncErArena,
+      syncMySeat,
+      mySeatIndex,
     ]
   );
 
@@ -707,6 +798,7 @@ export default function RoomPage() {
           payer,
           roomId,
           priceFeed: arena.priceFeed,
+          playerCount: arena.playerCount,
         })
       );
       pushLog({
@@ -976,6 +1068,7 @@ export default function RoomPage() {
       }
       pushLog({ layer: "L1", action: `fund ${count} practice ${noun}`, sig: fundSig });
 
+      const seatBase = arena.playerCount;
       for (let i = 0; i < fresh.length; i++) {
         const b = fresh[i];
         setBusyAction(`Seating the ${BOT_STYLE_LABEL[b.style].toLowerCase()} (${i + 1} of ${count})…`);
@@ -986,6 +1079,12 @@ export default function RoomPage() {
               player: b.wallet.publicKey,
               roomId,
               sessionKey: b.session.publicKey,
+              seatIndex: seatBase + i,
+            }),
+            buildDelegateSeatIx({
+              payer: b.wallet.publicKey,
+              roomId,
+              seatIndex: seatBase + i,
             })
           ),
           b.wallet
@@ -1027,11 +1126,14 @@ export default function RoomPage() {
       if (now >= Number(a.endsAt) * 1000 - 300) return; // don't race the buzzer
       for (const b of seatedBotsRef.current) {
         const key = b.wallet.publicKey.toBase58();
-        const seat = a.players.find((s) => s.wallet.equals(b.wallet.publicKey));
-        if (!seat) continue;
+        const seatIndex = a.players
+          .slice(0, a.playerCount)
+          .findIndex((s) => s.wallet.equals(b.wallet.publicKey));
+        if (seatIndex < 0) continue;
         let st = botStateRef.current.get(key);
         if (!st) {
-          st = { nextAt: now + 500 + Math.random() * 1500, inFlight: false, pos: seat.position, mem: null };
+          // Every seat starts flat; after that the bot tracks its own (sealed) position
+          st = { nextAt: now + 500 + Math.random() * 1500, inFlight: false, pos: POS_FLAT, mem: null };
           botStateRef.current.set(key, st);
         }
         if (st.inFlight || now < st.nextAt) continue;
@@ -1042,18 +1144,22 @@ export default function RoomPage() {
 
         const state = st;
         state.inFlight = true;
-        sendErSessionTx(
-          erConn,
-          new Transaction().add(
-            buildTapIx({
-              signer: b.session.publicKey,
-              roomId,
-              newPosition: move,
-              priceFeed: a.priceFeed,
-            })
-          ),
-          b.session
-        )
+        getTeeConnection(b.session)
+          .then((conn) =>
+            sendErSessionTx(
+              conn,
+              new Transaction().add(
+                buildTapIx({
+                  signer: b.session.publicKey,
+                  roomId,
+                  newPosition: move,
+                  priceFeed: a.priceFeed,
+                  seatIndex,
+                })
+              ),
+              b.session
+            )
+          )
           .then((res) => {
             state.pos = move;
             const hist = priceHistoryRef.current;
@@ -1066,12 +1172,16 @@ export default function RoomPage() {
               ms: res.latencyMs,
             });
           })
-          .catch(() => {
-            // Resync from chain; the next tick decides again
-            const latest = arenaRef.current?.players.find((s) =>
-              s.wallet.equals(b.wallet.publicKey)
-            );
-            if (latest) state.pos = latest.position;
+          .catch(async () => {
+            // Resync from the bot's own sealed seat; the next tick decides again
+            try {
+              const conn = await getTeeConnection(b.session);
+              const info = await conn.getAccountInfo(findSeatPda(roomId, seatIndex)[0], "confirmed");
+              const sealed = info ? decodeSeatPosition(info.data) : null;
+              if (sealed) state.pos = sealed.position;
+            } catch {
+              // keep the last known position
+            }
           })
           .finally(() => {
             state.inFlight = false;
@@ -1079,7 +1189,7 @@ export default function RoomPage() {
       }
     }, 250);
     return () => clearInterval(id);
-  }, [botsLive, erConn, roomId, pushLog]);
+  }, [botsLive, roomId, pushLog]);
 
   // After the round: claim anything bots are owed, then send all their SOL back
   const handleSweepBots = async () => {
@@ -1226,9 +1336,16 @@ export default function RoomPage() {
       !vault.cancelled &&
       (sawLiveRef.current || unclaimedSeatIndices.length > 0)
     ) {
+      if (sawLiveRef.current && !revealedRef.current) {
+        revealedRef.current = true;
+        setRevealing(true);
+        setTimeout(() => setRevealing(false), 2600);
+        return;
+      }
+      if (revealing) return;
       setShowVictory((prev) => prev || !victoryDismissedRef.current);
     }
-  }, [arena?.status, primaryWinner, vault, unclaimedSeatIndices.length]);
+  }, [arena?.status, primaryWinner, vault, unclaimedSeatIndices.length, revealing]);
 
   const dismissVictory = useCallback(() => {
     victoryDismissedRef.current = true;
@@ -1710,9 +1827,15 @@ export default function RoomPage() {
                     <div>
                       <div className="score-label">
                         Your score{" "}
-                        <span className={`pos-chip ${posClass(mySeat.position)}`} style={{ marginLeft: 6 }}>
-                          {posLabel(mySeat.position)}
-                        </span>
+                        {mySealed ? (
+                          <span className={`pos-chip ${posClass(mySeat.position)}`} style={{ marginLeft: 6 }}>
+                            {posLabel(mySeat.position)}
+                          </span>
+                        ) : (
+                          <span className="pos-chip flat" style={{ marginLeft: 6 }}>
+                            <Lock size={11} aria-hidden="true" /> Sealed
+                          </span>
+                        )}
                       </div>
                       <div className={`score ${pnlClass(myLivePnl)}`}>
                         {formatPnlPct(myLivePnl)}
@@ -1723,6 +1846,14 @@ export default function RoomPage() {
                       trades, zero gas
                     </div>
                   </div>
+                  <p className="seal-note">
+                    <Lock size={13} aria-hidden="true" />
+                    {!activeSessionKey
+                      ? "Your position is only visible in the tab you joined from."
+                      : mySealed?.sealed
+                        ? "Only you can see your position. Everyone sees it at the buzzer."
+                        : "Your first trade seals your seat. Only you see your position until the buzzer."}
+                  </p>
 
                   <div className={canTap ? "pad-dock" : undefined}>
                     <div className="pad" role="group" aria-label="Choose a position">
@@ -1843,11 +1974,15 @@ export default function RoomPage() {
                     Standings
                   </h2>
                   <span className="card-note">
-                    {arena.playerCount} of {arena.maxPlayers} players
+                    {revealing
+                      ? "Buzzer. Every position is public now"
+                      : isSealedRound && arena.status === "Live"
+                        ? "Open trades stay hidden until the buzzer"
+                        : `${arena.playerCount} of ${arena.maxPlayers} players`}
                   </span>
                 </div>
                 <div className="card-body">
-                  <ol className="standings">
+                  <ol className={`standings ${revealing ? "revealing" : ""}`}>
                     {rankedSeats.map((row, rank) => {
                       const isMe = publicKey !== null && row.seat.wallet.equals(publicKey);
                       const isWinner =
@@ -1873,13 +2008,30 @@ export default function RoomPage() {
                               </span>
                             )}
                             <br />
-                            <span className={posClass(row.seat.position) === "long" ? "up" : posClass(row.seat.position) === "short" ? "down" : ""}>
-                              {posLabel(row.seat.position)}
-                            </span>
-                            , {row.seat.tapCount} {row.seat.tapCount === 1 ? "trade" : "trades"}
+                            {arena.status === "Aborted" ? null : isSealedRound && !(isMe && mySealed) ? (
+                              <>
+                                <span className="sealed">
+                                  <Lock size={11} aria-hidden="true" /> Sealed
+                                </span>
+                                ,{" "}
+                              </>
+                            ) : (
+                              <>
+                                <span
+                                  className={`${posClass(row.seat.position) === "long" ? "up" : posClass(row.seat.position) === "short" ? "down" : ""} ${arena.status === "Finished" ? "revealed" : ""}`}
+                                  style={{ "--i": rank } as React.CSSProperties}
+                                >
+                                  {posLabel(row.seat.position)}
+                                  {arena.status === "Finished" ? " at the buzzer" : ""}
+                                </span>
+                                ,{" "}
+                              </>
+                            )}
+                            {row.seat.tapCount} {row.seat.tapCount === 1 ? "trade" : "trades"}
                           </span>
                           <span className={`pnl ${pnlClass(row.livePnl)}`}>
                             {formatPnlPct(row.livePnl)}
+                            {isSealedRound && !isMe && <small>banked</small>}
                           </span>
                         </li>
                       );

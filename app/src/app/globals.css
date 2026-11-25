@@ -1449,6 +1449,60 @@ fieldset {
   padding-right: 20px;
 }
 
+.standing .pnl small {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--slate-dim);
+}
+
+.standing .who .sealed {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--slate-dim);
+}
+
+.standings.revealing .revealed {
+  display: inline-block;
+  animation: buzzer-reveal 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation-delay: calc(var(--i, 0) * 260ms + 150ms);
+}
+
+@keyframes buzzer-reveal {
+  from {
+    opacity: 0;
+    transform: rotateX(90deg);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .standings.revealing .revealed {
+    animation: none;
+  }
+}
+
+.seal-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 14px;
+  color: var(--slate);
+  font-size: var(--t-xs);
+  line-height: 1.4;
+}
+
+.seal-note svg {
+  flex-shrink: 0;
+  color: var(--jacket);
+}
+
 .seat-open {
   color: var(--slate-dim);
   font-size: var(--t-sm);

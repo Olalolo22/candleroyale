@@ -29,6 +29,17 @@ Remove MagicBlock Ephemeral Rollups, Session Keys, or the ER Pyth Lazer feed and
 
 ---
 
+## The Dark Pit: Sealed Positions on MagicBlock's Private Rollup
+
+In a normal pit you can watch the leader and copy them. Here you can't.
+
+- **Every player gets a private seat account.** It is created when you join and handed to MagicBlock's Private Ephemeral Rollup (an Intel TDX enclave) in the same transaction.
+- **Your first trade seals it.** Inside that same `tap`, the program creates a MagicBlock permission whose only members are your wallet and your in-browser session key. From then on only you can read your position, and the rollup hides your transactions from everyone else.
+- **The scoreboard stays public.** It shows each player's banked score (closed trades) and trade count. Nobody sees which way anyone is pointed while the clock runs.
+- **The buzzer reveals everything.** `finish_round` reads every sealed seat, closes each position at the closing price, writes the position held at the buzzer onto the public scoreboard, and commits the scoreboard and all seats back to Solana together.
+
+Honest limits: a banked score that changes when someone flips hints at the side they just closed, and the trade count is public. Open positions, entry prices and live P&L stay hidden.
+
 ## Architecture
 
 ```mermaid

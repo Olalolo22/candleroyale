@@ -8,11 +8,15 @@ import {
   ARENA_LEVERAGE,
   ARENA_SEED,
   CANDLEROYALE_PROGRAM_ID,
+  EPHEMERAL_VAULT_ID,
+  PERMISSION_PROGRAM_ID,
+  PERMISSION_SEED,
+  SEAT_ACCOUNT_SIZE,
+  SEAT_SEED,
   DELEGATE_BUFFER_TAG,
   DELEGATION_METADATA_TAG,
   DELEGATION_PROGRAM_ID,
   DELEGATION_RECORD_TAG,
-  ER_VALIDATOR_PUBKEY,
   MAGIC_CONTEXT_ID,
   MAGIC_PROGRAM_ID,
   MAX_PLAYERS,
@@ -27,6 +31,7 @@ import {
 export const DISCRIMINATORS = {
   create_room: new Uint8Array([130, 166, 32, 2, 247, 120, 178, 53]),
   join_room: new Uint8Array([95, 232, 188, 81, 124, 130, 78, 139]),
+  delegate_seat: new Uint8Array([53, 85, 50, 81, 161, 68, 71, 212]),
   cancel_room: new Uint8Array([91, 107, 215, 178, 200, 224, 241, 237]),
   start_and_delegate: new Uint8Array([139, 194, 95, 32, 34, 32, 178, 251]),
   begin_round: new Uint8Array([209, 88, 27, 188, 15, 243, 202, 186]),
@@ -37,6 +42,7 @@ export const DISCRIMINATORS = {
   claim_payout: new Uint8Array([127, 240, 132, 62, 227, 198, 146, 133]),
   account_Vault: new Uint8Array([211, 8, 232, 43, 2, 152, 117, 119]),
   account_Arena: new Uint8Array([243, 215, 44, 44, 231, 211, 232, 168]),
+  account_SeatPosition: new Uint8Array([76, 145, 123, 146, 35, 205, 12, 0]),
 } as const;
 
 export const PRICE_UPDATE_V2_DISCRIMINATOR = new Uint8Array([
@@ -140,6 +146,62 @@ export function findArenaPda(
     [ARENA_SEED, u64ToLeBytes(roomId)],
     programId
   );
+}
+
+export function findSeatPda(
+  roomId: bigint | number,
+  seatIndex: number,
+  programId = CANDLEROYALE_PROGRAM_ID
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [SEAT_SEED, u64ToLeBytes(roomId), Uint8Array.of(seatIndex & 0xff)],
+    programId
+  );
+}
+
+export function findSeatPdas(
+  roomId: bigint | number,
+  playerCount: number,
+  programId = CANDLEROYALE_PROGRAM_ID
+): PublicKey[] {
+  return Array.from(
+    { length: playerCount },
+    (_, i) => findSeatPda(roomId, i, programId)[0]
+  );
+}
+
+export function findPermissionPda(account: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [PERMISSION_SEED, account.toBytes()],
+    PERMISSION_PROGRAM_ID
+  )[0];
+}
+
+export interface SealedSeat {
+  roomId: bigint;
+  seatIndex: number;
+  wallet: PublicKey;
+  sessionKey: PublicKey;
+  position: PositionDir;
+  entryPrice: bigint;
+  sealed: boolean;
+}
+
+/** Decode a private SeatPosition account (only readable by its own player on the TEE). */
+export function decodeSeatPosition(data: Uint8Array): SealedSeat | null {
+  if (data.length < SEAT_ACCOUNT_SIZE) return null;
+  const disc = DISCRIMINATORS.account_SeatPosition;
+  for (let i = 0; i < 8; i++) if (data[i] !== disc[i]) return null;
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  let o = 8;
+  const roomId = view.getBigUint64(o, true); o += 8;
+  const seatIndex = view.getUint8(o); o += 1;
+  const wallet = new PublicKey(data.slice(o, o + 32)); o += 32;
+  const sessionKey = new PublicKey(data.slice(o, o + 32)); o += 32;
+  const position = view.getInt8(o) as PositionDir; o += 1;
+  const entryPrice = view.getBigInt64(o, true); o += 8;
+  const sealed = view.getUint8(o) === 1;
+  return { roomId, seatIndex, wallet, sessionKey, position, entryPrice, sealed };
 }
 
 export function findDelegationPdas(
@@ -367,6 +429,7 @@ export function buildCreateRoomIx(params: {
   const programId = params.programId ?? CANDLEROYALE_PROGRAM_ID;
   const [vault] = findVaultPda(params.roomId, programId);
   const [arena] = findArenaPda(params.roomId, programId);
+  const [seat] = findSeatPda(params.roomId, 0, programId);
 
   const args = new Uint8Array(8 + 8 + 8 + 1 + 32 + 32);
   const view = new DataView(args.buffer);
@@ -383,6 +446,7 @@ export function buildCreateRoomIx(params: {
       { pubkey: params.creator, isSigner: true, isWritable: true },
       { pubkey: vault, isSigner: false, isWritable: true },
       { pubkey: arena, isSigner: false, isWritable: true },
+      { pubkey: seat, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: Buffer.from(concatBytes(DISCRIMINATORS.create_room, args)),
@@ -393,16 +457,20 @@ export function buildJoinRoomIx(params: {
   player: PublicKey;
   roomId: bigint;
   sessionKey: PublicKey;
+  /** The next free seat (= current player count). */
+  seatIndex: number;
   programId?: PublicKey;
 }): TransactionInstruction {
   const programId = params.programId ?? CANDLEROYALE_PROGRAM_ID;
   const [vault] = findVaultPda(params.roomId, programId);
   const [arena] = findArenaPda(params.roomId, programId);
+  const [seat] = findSeatPda(params.roomId, params.seatIndex, programId);
 
   const data = concatBytes(
     DISCRIMINATORS.join_room,
     u64ToLeBytes(params.roomId),
-    params.sessionKey.toBytes()
+    params.sessionKey.toBytes(),
+    Uint8Array.of(params.seatIndex & 0xff)
   );
 
   return new TransactionInstruction({
@@ -411,6 +479,7 @@ export function buildJoinRoomIx(params: {
       { pubkey: params.player, isSigner: true, isWritable: true },
       { pubkey: vault, isSigner: false, isWritable: true },
       { pubkey: arena, isSigner: false, isWritable: true },
+      { pubkey: seat, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: Buffer.from(data),
@@ -442,12 +511,13 @@ export function buildCancelRoomIx(params: {
 export function buildStartAndDelegateIx(params: {
   payer: PublicKey;
   roomId: bigint;
-  validator?: PublicKey;
+  /** Number of seated players; every seat PDA is passed so the program can check they are delegated. */
+  playerCount: number;
   programId?: PublicKey;
 }): TransactionInstruction {
   const programId = params.programId ?? CANDLEROYALE_PROGRAM_ID;
-  const validator = params.validator ?? ER_VALIDATOR_PUBKEY;
   const [arena] = findArenaPda(params.roomId, programId);
+  const seats = findSeatPdas(params.roomId, params.playerCount, programId);
   const { bufferArena, delegationRecordArena, delegationMetadataArena } =
     findDelegationPdas(arena, programId);
 
@@ -463,8 +533,8 @@ export function buildStartAndDelegateIx(params: {
       { pubkey: programId, isSigner: false, isWritable: false },
       { pubkey: DELEGATION_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      // Remaining account[0]: pinned MagicBlock ER validator (verified on-chain)
-      { pubkey: validator, isSigner: false, isWritable: false },
+      // Remaining accounts: every seat PDA in order (each must already be delegated)
+      ...seats.map((pubkey) => ({ pubkey, isSigner: false, isWritable: false })),
     ],
     data: Buffer.from(
       concatBytes(
@@ -497,15 +567,56 @@ export function buildBeginRoundIx(params: {
   });
 }
 
+export function buildDelegateSeatIx(params: {
+  payer: PublicKey;
+  roomId: bigint;
+  seatIndex: number;
+  programId?: PublicKey;
+}): TransactionInstruction {
+  const programId = params.programId ?? CANDLEROYALE_PROGRAM_ID;
+  const [seat] = findSeatPda(params.roomId, params.seatIndex, programId);
+  const {
+    bufferArena: bufferSeat,
+    delegationRecordArena: delegationRecordSeat,
+    delegationMetadataArena: delegationMetadataSeat,
+  } = findDelegationPdas(seat, programId);
+
+  // Same #[delegate] expansion as start_and_delegate, for the `seat` field
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: params.payer, isSigner: true, isWritable: true },
+      { pubkey: bufferSeat, isSigner: false, isWritable: true },
+      { pubkey: delegationRecordSeat, isSigner: false, isWritable: true },
+      { pubkey: delegationMetadataSeat, isSigner: false, isWritable: true },
+      { pubkey: seat, isSigner: false, isWritable: true },
+      { pubkey: programId, isSigner: false, isWritable: false },
+      { pubkey: DELEGATION_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from(
+      concatBytes(
+        DISCRIMINATORS.delegate_seat,
+        u64ToLeBytes(params.roomId),
+        Uint8Array.of(params.seatIndex & 0xff)
+      )
+    ),
+  });
+}
+
 export function buildTapIx(params: {
   signer: PublicKey;
   roomId: bigint;
   newPosition: PositionDir;
   priceFeed: PublicKey;
+  /** The signer's own seat index in the room. */
+  seatIndex: number;
   programId?: PublicKey;
 }): TransactionInstruction {
   const programId = params.programId ?? CANDLEROYALE_PROGRAM_ID;
   const [arena] = findArenaPda(params.roomId, programId);
+  const [seat] = findSeatPda(params.roomId, params.seatIndex, programId);
+  const permission = findPermissionPda(seat);
 
   const posBuf = new Uint8Array(1);
   new DataView(posBuf.buffer).setInt8(0, params.newPosition);
@@ -515,7 +626,12 @@ export function buildTapIx(params: {
     keys: [
       { pubkey: params.signer, isSigner: true, isWritable: false },
       { pubkey: arena, isSigner: false, isWritable: true },
+      { pubkey: seat, isSigner: false, isWritable: true },
       { pubkey: params.priceFeed, isSigner: false, isWritable: false },
+      { pubkey: permission, isSigner: false, isWritable: true },
+      { pubkey: PERMISSION_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: EPHEMERAL_VAULT_ID, isSigner: false, isWritable: true },
+      { pubkey: MAGIC_PROGRAM_ID, isSigner: false, isWritable: false },
     ],
     data: Buffer.from(
       concatBytes(DISCRIMINATORS.tap, u64ToLeBytes(params.roomId), posBuf)
@@ -527,10 +643,12 @@ export function buildFinishRoundIx(params: {
   payer: PublicKey;
   roomId: bigint;
   priceFeed: PublicKey;
+  playerCount: number;
   programId?: PublicKey;
 }): TransactionInstruction {
   const programId = params.programId ?? CANDLEROYALE_PROGRAM_ID;
   const [arena] = findArenaPda(params.roomId, programId);
+  const seats = findSeatPdas(params.roomId, params.playerCount, programId);
 
   // Exact account order expanded by #[commit] in ephemeral-rollups-sdk 0.16.2:
   // payer, arena, price_feed, magic_program, magic_context
@@ -542,6 +660,8 @@ export function buildFinishRoundIx(params: {
       { pubkey: params.priceFeed, isSigner: false, isWritable: false },
       { pubkey: MAGIC_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: MAGIC_CONTEXT_ID, isSigner: false, isWritable: true },
+      // Remaining accounts: every sealed seat, revealed and undelegated with the arena
+      ...seats.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
     ],
     data: Buffer.from(
       concatBytes(DISCRIMINATORS.finish_round, u64ToLeBytes(params.roomId))

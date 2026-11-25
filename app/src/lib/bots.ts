@@ -35,8 +35,12 @@ export const BOT_STYLE_LABEL: Record<BotStyle, string> = {
 
 const STYLES: BotStyle[] = ["momentum", "contrarian", "scalper"];
 
-/** Covers the join fee and keeps the bot wallet above the rent-exempt minimum. */
-export const BOT_FUND_BUFFER_LAMPORTS = 2_000_000n;
+/**
+ * Sent on top of the stake. Covers the bot's private seat account (about 1.5M lamports of
+ * rent, which stays with the seat), the seat's privacy rent, fees, and the bot wallet's own
+ * rent-exempt minimum so it can still be swept afterwards.
+ */
+export const BOT_FUND_BUFFER_LAMPORTS = 4_000_000n;
 const TX_FEE_LAMPORTS = 5_000;
 
 const storageKey = (roomId: string) => `candleroyale_bots_v1_${roomId}`;

@@ -12,6 +12,7 @@ import { fmtSol } from "@/lib/pit";
 import {
   ArenaAccount,
   buildCreateRoomIx,
+  buildDelegateSeatIx,
   decodeArena,
   DISCRIMINATORS,
 } from "@sdk/codec";
@@ -192,7 +193,11 @@ export default function LobbyPage() {
         sessionKey: sessionKey.publicKey,
       });
 
-      const tx = new Transaction().add(ix);
+      // Your seat is created private and handed to MagicBlock's private rollup in the same step
+      const tx = new Transaction().add(
+        ix,
+        buildDelegateSeatIx({ payer: publicKey, roomId, seatIndex: 0 })
+      );
       await sendL1Transaction(tx);
       router.push(`/room/${roomId.toString()}`);
     } catch (err: unknown) {
