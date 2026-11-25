@@ -114,6 +114,9 @@ export function TopBar({ erSlot }: { erSlot?: number | null }) {
           <span className="brand-name">
             Candle<b>Royale</b>
           </span>
+          <span className="net-tag" title="Runs on Solana Devnet. Stakes are free test SOL, not real money.">
+            Devnet
+          </span>
         </Link>
 
         <div className="topbar-right">
@@ -140,7 +143,7 @@ export function TopBar({ erSlot }: { erSlot?: number | null }) {
 
           <button
             type="button"
-            className="btn btn-quiet btn-icon"
+            className="btn btn-quiet btn-icon sfx-btn"
             onClick={() => setSfxOn(pitAudio.toggle())}
             aria-label={sfxOn ? "Mute sound effects" : "Turn on sound effects"}
             aria-pressed={sfxOn}
@@ -225,6 +228,10 @@ export function TopBar({ erSlot }: { erSlot?: number | null }) {
               trade is signed by a temporary key in this tab, so no more popups
               and no gas.
             </p>
+            <p className="modal-note">
+              CandleRoyale runs on Solana Devnet, so stakes are free test SOL.
+              Switch your wallet to Devnet to see the right balance.
+            </p>
 
             {connectErr && <div className="banner error">{connectErr}</div>}
 
@@ -249,7 +256,7 @@ export function TopBar({ erSlot }: { erSlot?: number | null }) {
                   <KeyRound size={16} color="#ffc928" />
                   Devnet burner
                 </span>
-                <span>Best for a second tab</span>
+                <span>No extension needed</span>
               </button>
             </div>
 
