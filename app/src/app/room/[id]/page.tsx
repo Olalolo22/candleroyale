@@ -52,6 +52,7 @@ import {
 } from "@/lib/pit";
 import {
   ArenaAccount,
+  buildAbortStaleLobbyIx,
   buildAbortStaleRoomIx,
   buildBeginRoundIx,
   buildCancelRoomIx,
@@ -83,6 +84,7 @@ import {
   PositionDir,
   SETTLE_GRACE_SECS,
   SOLANA_L1_RPC,
+  L1_LOBBY_TIMEOUT_SECS,
   STALE_LOBBY_TIMEOUT_SECS,
 } from "@sdk/constants";
 
@@ -279,6 +281,18 @@ export default function RoomPage() {
       ? (Number(arena.createdAt) + STALE_LOBBY_TIMEOUT_SECS) * 1000
       : 0;
 
+  // L1 escape hatch: joined room whose creator never started it
+  const l1AbortAtMs =
+    arena && arena.createdAt > 0n
+      ? (Number(arena.createdAt) + L1_LOBBY_TIMEOUT_SECS) * 1000
+      : 0;
+  const isStaleL1Lobby =
+    !isDelegated &&
+    arena?.status === "Lobby" &&
+    arena.playerCount >= 2 &&
+    l1AbortAtMs > 0 &&
+    nowMs >= l1AbortAtMs;
+
   const isStaleDelegatedLobby =
     isDelegated &&
     arena?.status === "Lobby" &&
@@ -410,6 +424,35 @@ export default function RoomPage() {
           err instanceof Error
             ? err.message
             : "Couldn't join. Check your wallet is on Devnet and has enough SOL.",
+      });
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleAbortStaleLobby = async () => {
+    setBanner(null);
+    if (!publicKey) {
+      openModal();
+      return;
+    }
+    setBusyAction("Aborting the room so everyone can reclaim their stake…");
+    try {
+      const ix = buildAbortStaleLobbyIx({ signer: publicKey, roomId });
+      const sig = await sendL1Transaction(new Transaction().add(ix));
+      pushLog({ layer: "L1", action: "abort_stale_lobby", sig });
+      setBanner({
+        kind: "info",
+        text: "Room aborted. Every player can now reclaim their stake.",
+      });
+      await syncState();
+    } catch (err: unknown) {
+      setBanner({
+        kind: "error",
+        text:
+          err instanceof Error
+            ? err.message
+            : "Couldn't abort the room. Try again.",
       });
     } finally {
       setBusyAction(null);
@@ -634,11 +677,11 @@ export default function RoomPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [isDelegated, activeSessionKey, isTerminal, handleTap]);
 
-  const handleFinishRound = useCallback(async () => {
-    if (!arena) return;
+  const handleFinishRound = useCallback(async (opts?: { quiet?: boolean }): Promise<boolean> => {
+    if (!arena) return false;
     if (!activeSessionKey && !publicKey) {
       openModal();
-      return;
+      return false;
     }
     setBanner(null);
     setBusyAction("Closing every position and sending the result to Solana…");
@@ -676,14 +719,18 @@ export default function RoomPage() {
         kind: "success",
         text: "Settled on Solana. Payouts are ready.",
       });
+      return true;
     } catch (err: unknown) {
-      setBanner({
-        kind: "error",
-        text:
-          err instanceof Error
-            ? err.message
-            : "Couldn't settle the room. Try again.",
-      });
+      if (!opts?.quiet) {
+        setBanner({
+          kind: "error",
+          text:
+            err instanceof Error
+              ? err.message
+              : "Couldn't settle the room. Try again.",
+        });
+      }
+      return false;
     } finally {
       setBusyAction(null);
     }
@@ -701,19 +748,40 @@ export default function RoomPage() {
     syncState,
   ]);
 
-  // Automatically settle inside the 3s grace window when a 0-popup Session Key is active
+  // Latest status for the auto-settle loop (its closure would otherwise go stale)
+  const arenaStatusRef = useRef<string | undefined>(arena?.status);
+  arenaStatusRef.current = arena?.status;
+
+  // Automatically settle inside the grace window when a 0-popup Session Key is active.
+  // Retries, because the ER clock counts whole seconds and a phone clock can run a little
+  // ahead: an attempt that lands before ends_at fails with RoundStillActive, and a single
+  // failed try would otherwise push settlement past the grace window to last_price.
   useEffect(() => {
     if (
-      isDelegated &&
-      arena?.status === "Live" &&
-      timerExpired &&
-      activeSessionKey &&
-      !busyAction &&
-      !autoSettledRef.current
+      !(
+        isDelegated &&
+        arena?.status === "Live" &&
+        timerExpired &&
+        activeSessionKey &&
+        !busyAction &&
+        !autoSettledRef.current
+      )
     ) {
-      autoSettledRef.current = true;
-      void handleFinishRound();
+      return;
     }
+    autoSettledRef.current = true;
+    const graceEndMs = (Number(arena.endsAt) + SETTLE_GRACE_SECS) * 1000;
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    void (async () => {
+      await sleep(350); // let the on-chain second tick over before the first try
+      while (Date.now() < graceEndMs + 1500) {
+        if (arenaStatusRef.current !== "Live") return; // someone else settled
+        if (await handleFinishRound({ quiet: true })) return;
+        await sleep(400);
+      }
+      // Past the grace window: settle anyway (closes at last trade price) and surface errors
+      if (arenaStatusRef.current === "Live") await handleFinishRound();
+    })();
   }, [
     isDelegated,
     arena?.status,
@@ -996,6 +1064,20 @@ export default function RoomPage() {
       } else if (!mySeat) {
         title = "This room is full";
         body = `Waiting for ${badgeFor(arena.creator)} to start it. You can watch the round from here.`;
+      } else if (!isCreator && isStaleL1Lobby) {
+        title = "The creator never started this room";
+        body = `It's been over ${Math.round(L1_LOBBY_TIMEOUT_SECS / 60)} minutes. Abort it and every player gets their stake back.`;
+        actions = (
+          <button
+            type="button"
+            id="abort-stale-lobby-btn"
+            className="btn btn-primary btn-lg"
+            onClick={handleAbortStaleLobby}
+            disabled={!!busyAction}
+          >
+            {connected ? "Abort and refund everyone" : "Connect wallet to abort"}
+          </button>
+        );
       } else if (!isCreator) {
         title = "You're seated";
         body = `Waiting for the room creator (${badgeFor(arena.creator)}) to start the room and lock seats.`;
@@ -1096,7 +1178,7 @@ export default function RoomPage() {
           type="button"
           id="finish-round-btn"
           className="btn btn-primary btn-lg"
-          onClick={handleFinishRound}
+          onClick={() => void handleFinishRound()}
           disabled={!!busyAction}
         >
           {activeSessionKey || connected

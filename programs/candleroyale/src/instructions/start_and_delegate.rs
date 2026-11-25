@@ -38,15 +38,15 @@ pub fn handle_start_and_delegate(ctx: Context<StartAndDelegate>, room_id: u64) -
         );
     }
 
-    // Deserialize in a tight scope so the immutable borrow drops before the delegation CPI.
+    // Deserialize in a tight scope so the borrow drops before the delegation CPI.
     {
         require_keys_eq!(
             *ctx.accounts.arena.owner,
             crate::ID,
             CandleRoyaleError::InvalidArenaAccount
         );
-        let data = ctx.accounts.arena.try_borrow_data()?;
-        let arena_data = Arena::try_deserialize(&mut &data[..])
+        let mut data = ctx.accounts.arena.try_borrow_mut_data()?;
+        let mut arena_data = Arena::try_deserialize(&mut &data[..])
             .map_err(|_| error!(CandleRoyaleError::InvalidArenaAccount))?;
 
         require!(
@@ -68,6 +68,15 @@ pub fn handle_start_and_delegate(ctx: Context<StartAndDelegate>, room_id: u64) -
             arena_data.creator,
             CandleRoyaleError::UnauthorizedSigner
         );
+
+        // Restart the stale-lobby clock at delegation. `abort_stale_room` measures from
+        // `created_at`, so without this reset any room that waited longer than
+        // STALE_LOBBY_TIMEOUT_SECS in the L1 lobby (normal while waiting for friends)
+        // could be aborted by anyone the instant it reached the rollup.
+        arena_data.created_at = Clock::get()?.unix_timestamp;
+        arena_data
+            .try_serialize(&mut &mut data[..])
+            .map_err(|_| error!(CandleRoyaleError::InvalidArenaAccount))?;
     }
 
     // Always pin delegation to the protocol-enforced MagicBlock ER validator.

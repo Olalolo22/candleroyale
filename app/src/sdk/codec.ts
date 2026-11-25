@@ -33,6 +33,7 @@ export const DISCRIMINATORS = {
   tap: new Uint8Array([31, 254, 225, 122, 3, 186, 67, 245]),
   finish_round: new Uint8Array([23, 104, 163, 186, 110, 225, 11, 242]),
   abort_stale_room: new Uint8Array([48, 114, 196, 20, 83, 157, 76, 137]),
+  abort_stale_lobby: new Uint8Array([47, 115, 74, 102, 217, 105, 230, 93]),
   claim_payout: new Uint8Array([127, 240, 132, 62, 227, 198, 146, 133]),
   account_Vault: new Uint8Array([211, 8, 232, 43, 2, 152, 117, 119]),
   account_Arena: new Uint8Array([243, 215, 44, 44, 231, 211, 232, 168]),
@@ -568,6 +569,30 @@ export function buildAbortStaleRoomIx(params: {
     ],
     data: Buffer.from(
       concatBytes(DISCRIMINATORS.abort_stale_room, u64ToLeBytes(params.roomId))
+    ),
+  });
+}
+
+/**
+ * L1 escape hatch: any seated player aborts a joined room the creator never started,
+ * after L1_LOBBY_TIMEOUT_SECS. Seats then reclaim their entry via claim_payout.
+ */
+export function buildAbortStaleLobbyIx(params: {
+  signer: PublicKey;
+  roomId: bigint;
+  programId?: PublicKey;
+}): TransactionInstruction {
+  const programId = params.programId ?? CANDLEROYALE_PROGRAM_ID;
+  const [arena] = findArenaPda(params.roomId, programId);
+
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: params.signer, isSigner: true, isWritable: false },
+      { pubkey: arena, isSigner: false, isWritable: true },
+    ],
+    data: Buffer.from(
+      concatBytes(DISCRIMINATORS.abort_stale_lobby, u64ToLeBytes(params.roomId))
     ),
   });
 }

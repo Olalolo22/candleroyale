@@ -72,6 +72,11 @@ pub mod candleroyale {
         instructions::abort_stale_room::handle_abort_stale_room(ctx, room_id)
     }
 
+    /// L1: Escape hatch when the creator never starts a joined room: any seated player can abort after L1_LOBBY_TIMEOUT_SECS, unlocking per-seat entry refunds.
+    pub fn abort_stale_lobby(ctx: Context<AbortStaleLobby>, room_id: u64) -> Result<()> {
+        instructions::abort_stale_lobby::handle_abort_stale_lobby(ctx, room_id)
+    }
+
     /// L1: Release single-winner pot, equal tie-split share, or aborted-room entry refund from Vault PDA to `arena.players[seat_index].wallet`.
     pub fn claim_payout(ctx: Context<ClaimPayout>, room_id: u64, seat_index: u8) -> Result<()> {
         instructions::claim_payout::handle_claim_payout(ctx, room_id, seat_index)

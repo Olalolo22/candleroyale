@@ -46,3 +46,9 @@ pub const SETTLE_GRACE_SECS: i64 = 3;
 
 /// Seconds a delegated Lobby room can sit idle without starting before anyone can call `abort_stale_room` to undelegate and refund.
 pub const STALE_LOBBY_TIMEOUT_SECS: i64 = 180;
+
+/// Seconds an undelegated (L1) Lobby room with 2+ players can wait for its creator to start it
+/// before any seated player can call `abort_stale_lobby` to unlock per-seat refunds.
+/// Without this, joiners' stakes were locked forever if the creator went offline:
+/// only the creator can start, and `cancel_room` only works while the creator is alone.
+pub const L1_LOBBY_TIMEOUT_SECS: i64 = 900;

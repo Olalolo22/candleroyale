@@ -97,6 +97,8 @@ export const NO_WINNER = 255;
 export const MAX_ORACLE_AGE_SECS = 10;
 export const SETTLE_GRACE_SECS = 3;
 export const STALE_LOBBY_TIMEOUT_SECS = 180;
+/** Mirrors L1_LOBBY_TIMEOUT_SECS: joined-but-never-started L1 rooms become abortable by seated players. */
+export const L1_LOBBY_TIMEOUT_SECS = 900;
 
 export const POS_SHORT = -1 as const;
 export const POS_FLAT = 0 as const;
