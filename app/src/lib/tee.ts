@@ -1,6 +1,5 @@
 import { Connection, Keypair } from "@solana/web3.js";
 import { ed25519 } from "@noble/curves/ed25519";
-import bs58 from "bs58";
 import { TEE_RPC_URL } from "@sdk/constants";
 
 /**
@@ -11,6 +10,30 @@ import { TEE_RPC_URL } from "@sdk/constants";
  * login challenge with the player's per-room session key, so it never needs a wallet
  * popup. Same flow as getAuthToken() in @magicblock-labs/ephemeral-rollups-sdk.
  */
+
+const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+/** Base58 (Bitcoin alphabet), enough for encoding a 64-byte signature. */
+export function base58Encode(bytes: Uint8Array): string {
+  let zeros = 0;
+  while (zeros < bytes.length && bytes[zeros] === 0) zeros++;
+  const digits: number[] = [];
+  for (let i = zeros; i < bytes.length; i++) {
+    let carry = bytes[i];
+    for (let j = 0; j < digits.length; j++) {
+      carry += digits[j] << 8;
+      digits[j] = carry % 58;
+      carry = (carry / 58) | 0;
+    }
+    while (carry > 0) {
+      digits.push(carry % 58);
+      carry = (carry / 58) | 0;
+    }
+  }
+  let out = "1".repeat(zeros);
+  for (let i = digits.length - 1; i >= 0; i--) out += B58[digits[i]];
+  return out;
+}
 
 interface CachedToken {
   token: string;
@@ -51,7 +74,7 @@ async function login(keypair: Keypair, rpcUrl: string): Promise<CachedToken> {
     body: JSON.stringify({
       pubkey,
       challenge,
-      signature: bs58.encode(signature),
+      signature: base58Encode(signature),
     }),
   });
   const body = (await loginRes.json()) as {
