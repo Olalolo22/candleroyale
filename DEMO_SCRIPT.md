@@ -7,7 +7,7 @@ About 90 seconds. Talk like you're showing a friend. Start straight on the live 
 1. Phantom on **Devnet** with at least **0.1 SOL**. That covers your stake and three bots.
 2. Open [candleroyale.vercel.app](https://candleroyale.vercel.app) and turn the sound on.
 3. Set up the room: **SOL** market, **0.01 SOL** stake, **60s** round, **4** players.
-4. Optional but strong: have the laptop open next to you, ready to load the same room as a spectator.
+4. Optional: an incognito window with no wallet, ready to snap to the right half of the screen (Alt + ] on a Chromebook) as a spectator. Skip it if the screen feels too cramped; the sealed bots already make the point.
 
 ---
 
@@ -34,9 +34,9 @@ About 90 seconds. Talk like you're showing a friend. Start straight on the live 
 >
 > That matters because if positions were public, whoever's ahead near the end could just copy the person chasing them and freeze the game. Sealed positions mean you have to out-trade the market right up to the end."
 
-**Optional:** Flip to the laptop showing the same room. Your own row says **Sealed** there too.
+**Optional:** With your window on the left half and the incognito spectator on the right, make a trade. Your row says **Long** on the left and **Sealed** on the right at the same moment.
 
-> "And this is the same room from someone else's screen. They can't see what I'm holding either."
+> "On the right is the same room from someone else's screen. They can't see what I'm holding either."
 
 ## 4. The round (0:35–1:05)
 
