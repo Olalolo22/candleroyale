@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { Connection, Keypair } from "@solana/web3.js";
 import {
+  buildAbortStaleLobbyIx,
   buildAbortStaleRoomIx,
   buildBeginRoundIx,
   buildClaimPayoutIx,
   buildCreateRoomIx,
+  buildDelegateSeatIx,
   buildFinishRoundIx,
   buildJoinRoomIx,
   buildStartAndDelegateIx,
@@ -14,6 +16,7 @@ import {
   decodeOracleTick,
   DISCRIMINATORS,
   findArenaPda,
+  findSeatPda,
   findVaultPda,
   formatPnlPct,
 } from "../sdk/codec";
@@ -31,24 +34,27 @@ function anchorSighash(preimage: string): number[] {
 }
 
 async function main() {
-  console.log("1. Verifying Anchor 8-byte discriminators (11 total)...");
+  console.log("1. Verifying Anchor 8-byte discriminators (14 total)...");
   const checks: Array<[Uint8Array, string]> = [
     [DISCRIMINATORS.create_room, "global:create_room"],
     [DISCRIMINATORS.join_room, "global:join_room"],
+    [DISCRIMINATORS.delegate_seat, "global:delegate_seat"],
     [DISCRIMINATORS.cancel_room, "global:cancel_room"],
     [DISCRIMINATORS.start_and_delegate, "global:start_and_delegate"],
     [DISCRIMINATORS.begin_round, "global:begin_round"],
     [DISCRIMINATORS.tap, "global:tap"],
     [DISCRIMINATORS.finish_round, "global:finish_round"],
     [DISCRIMINATORS.abort_stale_room, "global:abort_stale_room"],
+    [DISCRIMINATORS.abort_stale_lobby, "global:abort_stale_lobby"],
     [DISCRIMINATORS.claim_payout, "global:claim_payout"],
     [DISCRIMINATORS.account_Vault, "account:Vault"],
     [DISCRIMINATORS.account_Arena, "account:Arena"],
+    [DISCRIMINATORS.account_SeatPosition, "account:SeatPosition"],
   ];
   for (const [actual, preimage] of checks) {
     assert.deepEqual(Array.from(actual), anchorSighash(preimage));
   }
-  console.log("   All 11 discriminators match sha256 exactly.");
+  console.log("   All 14 discriminators match sha256 exactly.");
 
   console.log("2. Verifying leveraged PnL parity with Rust unit tests...");
   assert.equal(
@@ -63,13 +69,15 @@ async function main() {
   assert.equal(formatPnlPct(-24_500n), "-2.45%");
   console.log("   PnL calculations match Rust 1:1.");
 
-  console.log("3. Verifying all 9 instruction builders & layouts...");
+  console.log("3. Verifying all 11 instruction builders & layouts...");
   const creator = Keypair.generate().publicKey;
   const session = Keypair.generate().publicKey;
   const roomId = 42n;
   const [vault] = findVaultPda(roomId);
   const [arena] = findArenaPda(roomId);
+  const [seat0] = findSeatPda(roomId, 0);
   assert.notEqual(vault.toBase58(), arena.toBase58());
+  assert.notEqual(seat0.toBase58(), arena.toBase58());
 
   const ixCreate = buildCreateRoomIx({
     creator,
@@ -81,15 +89,25 @@ async function main() {
     sessionKey: session,
   });
   assert.equal(ixCreate.data.length, 8 + 8 + 8 + 8 + 1 + 32 + 32);
-  assert.equal(ixCreate.keys.length, 4);
+  assert.equal(ixCreate.keys.length, 5);
 
   assert.equal(
-    buildJoinRoomIx({ player: creator, roomId, sessionKey: session }).keys.length,
-    4
+    buildJoinRoomIx({
+      player: creator,
+      roomId,
+      sessionKey: session,
+      seatIndex: 1,
+    }).keys.length,
+    5
   );
   assert.equal(
-    buildStartAndDelegateIx({ payer: creator, roomId }).keys.length,
-    9
+    buildDelegateSeatIx({ payer: creator, roomId, seatIndex: 0 }).keys.length,
+    8
+  );
+  assert.equal(
+    buildStartAndDelegateIx({ payer: creator, roomId, playerCount: 2 }).keys
+      .length,
+    10
   );
   assert.equal(
     buildBeginRoundIx({
@@ -99,26 +117,31 @@ async function main() {
     }).keys.length,
     3
   );
-  assert.equal(
-    buildTapIx({
-      signer: session,
-      roomId,
-      newPosition: POS_LONG,
-      priceFeed: MARKET_FEEDS.SOL.address,
-    }).data.length,
-    8 + 8 + 1
-  );
+  const ixTap = buildTapIx({
+    signer: session,
+    roomId,
+    newPosition: POS_LONG,
+    priceFeed: MARKET_FEEDS.SOL.address,
+    seatIndex: 0,
+  });
+  assert.equal(ixTap.data.length, 8 + 8 + 1);
+  assert.equal(ixTap.keys.length, 8);
   assert.equal(
     buildFinishRoundIx({
       payer: creator,
       roomId,
       priceFeed: MARKET_FEEDS.SOL.address,
+      playerCount: 2,
     }).keys.length,
-    5
+    7
   );
   assert.equal(
     buildAbortStaleRoomIx({ payer: creator, roomId }).keys.length,
     4
+  );
+  assert.equal(
+    buildAbortStaleLobbyIx({ signer: creator, roomId }).keys.length,
+    2
   );
   const ixClaim = buildClaimPayoutIx({
     payer: creator,
@@ -128,7 +151,7 @@ async function main() {
   });
   assert.equal(ixClaim.keys.length, 4);
   assert.equal(ixClaim.data.length, 8 + 8 + 1);
-  console.log("   All 9 instruction builders verified.");
+  console.log("   All 11 instruction builders verified.");
 
   console.log(`4. Reading LIVE Pyth Lazer feeds from ${ER_RPC_URL}...`);
   const erConn = new Connection(ER_RPC_URL, "confirmed");

@@ -54,4 +54,8 @@ pub enum CandleRoyaleError {
     StaleTimeoutNotReached,
     #[msg("Seat is not eligible for payout in this round")]
     SeatNotWinner,
+    #[msg("Sealed seat account does not match this room and seat")]
+    InvalidSeatAccount,
+    #[msg("Settlement must include every seat's sealed position account, in seat order")]
+    MissingSeatAccounts,
 }

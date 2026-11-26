@@ -2,6 +2,11 @@ use anchor_lang::prelude::*;
 
 pub const VAULT_SEED: &[u8] = b"vault";
 pub const ARENA_SEED: &[u8] = b"arena";
+/// Per-seat private position account: [SEAT_SEED, room_id_le, seat_index].
+pub const SEAT_SEED: &[u8] = b"seat";
+
+/// Members on each sealed seat's ephemeral permission: the player's wallet and session key.
+pub const SEAT_PERMISSION_MEMBERS: usize = 2;
 
 /// Maximum players per CandleRoyale room.
 pub const MAX_PLAYERS: usize = 6;
@@ -24,8 +29,10 @@ pub const POS_LONG: i8 = 1;
 /// Unset winner sentinel.
 pub const NO_WINNER: u8 = u8::MAX;
 
-/// Pinned MagicBlock US Devnet Ephemeral Rollup validator enforced on-chain in `start_and_delegate`.
-pub const PINNED_ER_VALIDATOR: Pubkey = pubkey!("MUS3hc9TCw4cGC12vHNoYcCGzJG1txjgQLZWVoeNHNd");
+/// Pinned MagicBlock Devnet Private Ephemeral Rollup (Intel TDX TEE) validator, enforced on-chain
+/// for the Arena (`start_and_delegate`) and every sealed seat (`delegate_seat`).
+/// RPC: https://devnet-tee.magicblock.app (requires an auth token).
+pub const PINNED_ER_VALIDATOR: Pubkey = pubkey!("MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo");
 
 /// MagicBlock Real-Time Pricing Oracle program (Pyth Lazer on ER).
 pub const ORACLE_PROGRAM_ID: Pubkey = pubkey!("PriCems5tHihc6UDXDjzjeawomAwBduWMGAi8ZUjppd");

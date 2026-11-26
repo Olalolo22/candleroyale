@@ -8,12 +8,14 @@ import { TopBar } from "@/components/TopBar";
 import { useWallet } from "@/lib/wallet";
 import { getOrCreateSessionKey } from "@/lib/session";
 import { useAllMarkets } from "@/lib/useOracleStream";
-import { fmtSol } from "@/lib/pit";
+import { fmtSol, isLinkOnlyRoom, LINK_ONLY_ROOM_FLAG } from "@/lib/pit";
 import {
   ArenaAccount,
   buildCreateRoomIx,
+  buildDelegateSeatIx,
   decodeArena,
   DISCRIMINATORS,
+  findSeatPda,
 } from "@sdk/codec";
 import {
   ARENA_ACCOUNT_SIZE,
@@ -52,11 +54,11 @@ const ROUND_STEPS = [
   },
   {
     name: "Trade",
-    desc: "Go long, short or flat on a live price, as often as you like. No gas, no popups.",
+    desc: "Go long, short or flat on a live price, as often as you like. No gas, no popups, and nobody sees your position.",
   },
   {
     name: "Settle",
-    desc: "When the clock hits zero, every open position closes at the live price.",
+    desc: "When the clock hits zero, every position is revealed and closed at the live price.",
   },
   {
     name: "Payout",
@@ -111,6 +113,8 @@ export default function LobbyPage() {
   const [stakeLamports, setStakeLamports] = useState<bigint>(10_000_000n);
   const [durationSecs, setDurationSecs] = useState<number>(60);
   const [maxPlayers, setMaxPlayers] = useState<number>(2);
+  // "Invite link only" rooms stay off the public room list
+  const [linkOnly, setLinkOnly] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -148,7 +152,24 @@ export default function LobbyPage() {
         }
       }
       parsed.sort((a, b) => Number(b.arena.roomId - a.arena.roomId));
-      setRooms(parsed.slice(0, 40));
+      const recent = parsed.slice(0, 40);
+
+      // Rooms made before sealed seats existed have no seat account and can never start.
+      // Hide them unless they already finished (those still open fine as a record).
+      const seatInfos = recent.length
+        ? await l1Conn.getMultipleAccountsInfo(
+            recent.map((r) => findSeatPda(r.arena.roomId, 0)[0]),
+            "confirmed"
+          )
+        : [];
+      setRooms(
+        recent.filter(
+          (r, i) =>
+            seatInfos[i] !== null ||
+            r.arena.status === "Finished" ||
+            r.arena.status === "Aborted"
+        )
+      );
     } catch {
       // Program may not have rooms yet or RPC busy
     } finally {
@@ -160,15 +181,29 @@ export default function LobbyPage() {
     fetchOnChainRooms();
   }, [fetchOnChainRooms]);
 
+  // Link-only rooms are left out, except ones you're sitting in yourself
+  const listedRooms = useMemo(
+    () =>
+      rooms.filter(
+        (r) =>
+          !isLinkOnlyRoom(r.arena.roomId) ||
+          (!!publicKey &&
+            r.arena.players
+              .slice(0, r.arena.playerCount)
+              .some((p) => p.wallet.equals(publicKey)))
+      ),
+    [rooms, publicKey]
+  );
+
   const counts = useMemo(() => {
     const c: Record<RoomTab, number> = { open: 0, trading: 0, settled: 0 };
-    for (const r of rooms) c[roomTab(r)] += 1;
+    for (const r of listedRooms) c[roomTab(r)] += 1;
     return c;
-  }, [rooms]);
+  }, [listedRooms]);
 
   const visibleRooms = useMemo(
-    () => rooms.filter((r) => roomTab(r) === tab).slice(0, 12),
-    [rooms, tab]
+    () => listedRooms.filter((r) => roomTab(r) === tab).slice(0, 12),
+    [listedRooms, tab]
   );
 
   const handleCreateRoom = async () => {
@@ -180,7 +215,7 @@ export default function LobbyPage() {
 
     setCreating(true);
     try {
-      const roomId = BigInt(Date.now());
+      const roomId = BigInt(Date.now()) | (linkOnly ? LINK_ONLY_ROOM_FLAG : 0n);
       const sessionKey = getOrCreateSessionKey(roomId.toString(), publicKey.toBase58());
       const ix = buildCreateRoomIx({
         creator: publicKey,
@@ -192,7 +227,11 @@ export default function LobbyPage() {
         sessionKey: sessionKey.publicKey,
       });
 
-      const tx = new Transaction().add(ix);
+      // Your seat is created private and handed to MagicBlock's private rollup in the same step
+      const tx = new Transaction().add(
+        ix,
+        buildDelegateSeatIx({ payer: publicKey, roomId, seatIndex: 0 })
+      );
       await sendL1Transaction(tx);
       router.push(`/room/${roomId.toString()}`);
     } catch (err: unknown) {
@@ -246,6 +285,10 @@ export default function LobbyPage() {
             <strong>20× leverage</strong>. Flip long, short or flat as often as you
             like. Whoever is furthest ahead when the clock runs out{" "}
             <strong>takes everything</strong>.
+          </p>
+          <p className="hero-lead">
+            Everyone&apos;s position stays <strong>sealed until the buzzer</strong>, so
+            nobody can copy the leader. You only see banked scores.
           </p>
 
           <ol className="round-steps" aria-label="How a round works">
@@ -408,6 +451,41 @@ export default function LobbyPage() {
               </div>
             </fieldset>
 
+            <fieldset>
+              <legend className="field-legend">
+                Who can find it{" "}
+                <span>{linkOnly ? "Only people with the link" : "Anyone, on the room list"}</span>
+              </legend>
+              <div
+                className="choice-row"
+                role="radiogroup"
+                aria-label="Who can find it"
+                onKeyDown={(e) => onRadioKeys(e, [false, true], linkOnly, setLinkOnly)}
+              >
+                {[false, true].map((v) => {
+                  const checked = linkOnly === v;
+                  return (
+                    <button
+                      key={String(v)}
+                      type="button"
+                      role="radio"
+                      aria-checked={checked}
+                      tabIndex={checked ? 0 : -1}
+                      className="choice"
+                      onClick={() => setLinkOnly(v)}
+                    >
+                      {v ? "Invite link only" : "Room list"}
+                    </button>
+                  );
+                })}
+              </div>
+              {linkOnly && (
+                <p className="field-hint">
+                  Kept off the room list. It&apos;s still on Solana, so it&apos;s unlisted, not secret.
+                </p>
+              )}
+            </fieldset>
+
             <div className="ticket-total">
               <span>{solo ? "Your stake" : "Pot when full"}</span>
               <strong>
@@ -427,9 +505,9 @@ export default function LobbyPage() {
             </button>
 
             <p className="ticket-fine">
-              Stakes stay in a vault on Solana the whole time. Only the scoreboard
-              moves to MagicBlock&apos;s rollup, which is what makes trades instant and
-              free.
+              Stakes stay in a vault on Solana the whole time. Trades run on
+              MagicBlock&apos;s private rollup, a sealed enclave that keeps each position
+              hidden until the buzzer and makes trades instant and free.
             </p>
           </div>
         </aside>
@@ -521,6 +599,7 @@ export default function LobbyPage() {
                       <span>{arena.durationSecs.toString()}s</span>
                       <span>{entry > 0 ? `${fmtSol(entry)} SOL in` : "Free"}</span>
                       <span className="room-code">#{roomId.slice(-6)}</span>
+                      {isLinkOnlyRoom(roomId) && <span className="room-tag">Link only</span>}
                     </div>
                     <div className="room-pot">
                       <strong>{entry > 0 ? fmtSol(potSol) : "Free"}</strong>

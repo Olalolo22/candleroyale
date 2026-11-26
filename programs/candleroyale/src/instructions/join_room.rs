@@ -1,12 +1,12 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program::{self, Transfer};
 
-use crate::constants::{ARENA_SEED, POS_FLAT, VAULT_SEED};
+use crate::constants::{ARENA_SEED, POS_FLAT, SEAT_SEED, VAULT_SEED};
 use crate::errors::CandleRoyaleError;
-use crate::state::{Arena, ArenaStatus, PlayerSeat, Vault};
+use crate::state::{seat_permission_rent, Arena, ArenaStatus, PlayerSeat, SeatPosition, Vault};
 
 #[derive(Accounts)]
-#[instruction(room_id: u64)]
+#[instruction(room_id: u64, session_key: Pubkey, seat_index: u8)]
 pub struct JoinRoom<'info> {
     #[account(mut)]
     pub player: Signer<'info>,
@@ -25,6 +25,17 @@ pub struct JoinRoom<'info> {
     )]
     pub arena: Account<'info, Arena>,
 
+    /// The joiner's private position account. `seat_index` must equal the next free seat
+    /// (checked in the handler). Delegated to the TEE ER by `delegate_seat` in the same tx.
+    #[account(
+        init,
+        payer = player,
+        space = SeatPosition::SPACE,
+        seeds = [SEAT_SEED, &room_id.to_le_bytes(), &seat_index.to_le_bytes()],
+        bump,
+    )]
+    pub seat: Account<'info, SeatPosition>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -32,6 +43,7 @@ pub fn handle_join_room(
     ctx: Context<JoinRoom>,
     room_id: u64,
     session_key: Pubkey,
+    seat_index: u8,
 ) -> Result<()> {
     let vault = &mut ctx.accounts.vault;
     let arena = &mut ctx.accounts.arena;
@@ -51,6 +63,10 @@ pub fn handle_join_room(
 
     let player_key = ctx.accounts.player.key();
     let count = arena.player_count as usize;
+    require!(
+        seat_index as usize == count,
+        CandleRoyaleError::InvalidSeatAccount
+    );
     // Enforce complete disjointness across wallets and session keys for all seats.
     for seat in arena.players.iter().take(count) {
         require!(seat.wallet != player_key, CandleRoyaleError::AlreadyJoined);
@@ -97,6 +113,28 @@ pub fn handle_join_room(
         .player_count
         .checked_add(1)
         .ok_or(CandleRoyaleError::MathOverflow)?;
+
+    let seat = &mut ctx.accounts.seat;
+    seat.room_id = room_id;
+    seat.seat_index = seat_index;
+    seat.wallet = player_key;
+    seat.session_key = session_key;
+    seat.position = POS_FLAT;
+    seat.entry_price = 0;
+    seat.sealed = false;
+    seat.bump = ctx.bumps.seat;
+
+    // Pre-fund the seat so it can pay its own ephemeral permission rent on the TEE ER.
+    system_program::transfer(
+        CpiContext::new(
+            ctx.accounts.system_program.key(),
+            Transfer {
+                from: ctx.accounts.player.to_account_info(),
+                to: ctx.accounts.seat.to_account_info(),
+            },
+        ),
+        seat_permission_rent(),
+    )?;
 
     emit!(PlayerJoined {
         room_id,

@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use ephemeral_rollups_sdk::anchor::delegate;
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
 
-use crate::constants::{ARENA_SEED, PINNED_ER_VALIDATOR};
+use crate::constants::{ARENA_SEED, PINNED_ER_VALIDATOR, SEAT_SEED};
 use crate::errors::CandleRoyaleError;
 use crate::state::{Arena, ArenaStatus};
 
@@ -28,15 +28,6 @@ pub fn handle_start_and_delegate(ctx: Context<StartAndDelegate>, room_id: u64) -
         expected_pda,
         CandleRoyaleError::InvalidArenaAccount
     );
-
-    // Reject any caller attempt to substitute an unapproved or dead ER validator.
-    if let Some(passed) = ctx.remaining_accounts.first() {
-        require_keys_eq!(
-            passed.key(),
-            PINNED_ER_VALIDATOR,
-            CandleRoyaleError::InvalidValidator
-        );
-    }
 
     // Deserialize in a tight scope so the borrow drops before the delegation CPI.
     {
@@ -68,6 +59,31 @@ pub fn handle_start_and_delegate(ctx: Context<StartAndDelegate>, room_id: u64) -
             arena_data.creator,
             CandleRoyaleError::UnauthorizedSigner
         );
+
+        // Dark pit: every seated player's private position account must already sit on the
+        // TEE ER. remaining_accounts = [seat_0, .., seat_{n-1}]. Without this check a player
+        // could join without delegating their seat, and `finish_round` could never settle.
+        let count = arena_data.player_count as usize;
+        require!(
+            ctx.remaining_accounts.len() == count,
+            CandleRoyaleError::MissingSeatAccounts
+        );
+        for (idx, seat_info) in ctx.remaining_accounts.iter().enumerate() {
+            let (seat_pda, _) = Pubkey::find_program_address(
+                &[SEAT_SEED, room_id_bytes.as_ref(), &(idx as u8).to_le_bytes()],
+                &crate::ID,
+            );
+            require_keys_eq!(
+                seat_info.key(),
+                seat_pda,
+                CandleRoyaleError::InvalidSeatAccount
+            );
+            require_keys_eq!(
+                *seat_info.owner,
+                ephemeral_rollups_sdk::id(),
+                CandleRoyaleError::InvalidSeatAccount
+            );
+        }
 
         // Restart the stale-lobby clock at delegation. `abort_stale_room` measures from
         // `created_at`, so without this reset any room that waited longer than

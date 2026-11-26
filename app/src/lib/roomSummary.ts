@@ -14,6 +14,7 @@ import {
   SOLANA_L1_RPC,
 } from "@sdk/constants";
 import { badgeFor, fmtSol } from "@/lib/pit";
+import { getViewerConnection } from "@/lib/tee";
 
 /**
  * Server-side, read-only snapshot of a room for link previews (metadata + OG image).
@@ -65,7 +66,9 @@ async function fetchSummary(roomIdStr: string): Promise<RoomSummary | null> {
 
   let arenaData: Uint8Array = l1ArenaInfo.data;
   if (delegated) {
-    const erInfo = await er.getAccountInfo(arenaPda, "confirmed");
+    // Live rooms sit on the private rollup; the scoreboard is public to any signed-in viewer
+    const viewer = await getViewerConnection();
+    const erInfo = await viewer.getAccountInfo(arenaPda, "confirmed");
     if (erInfo) arenaData = erInfo.data;
   }
   const arena = decodeArena(arenaData);

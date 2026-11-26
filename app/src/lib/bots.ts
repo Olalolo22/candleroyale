@@ -35,8 +35,14 @@ export const BOT_STYLE_LABEL: Record<BotStyle, string> = {
 
 const STYLES: BotStyle[] = ["momentum", "contrarian", "scalper"];
 
-/** Covers the join fee and keeps the bot wallet above the rent-exempt minimum. */
-export const BOT_FUND_BUFFER_LAMPORTS = 2_000_000n;
+/**
+ * Sent on top of the stake. Joining and sealing a seat needs, at its peak: the private seat
+ * account (~1.53M lamports rent), the delegation program's record and metadata accounts
+ * (~1.4M each, returned when the round settles), a temporary buffer the size of the seat
+ * (~1.53M, returned in the same step), the privacy rent, fees, and the wallet's own
+ * rent-exempt minimum (~0.89M). Unspent SOL comes back when the bots are swept.
+ */
+export const BOT_FUND_BUFFER_LAMPORTS = 8_000_000n;
 const TX_FEE_LAMPORTS = 5_000;
 
 const storageKey = (roomId: string) => `candleroyale_bots_v1_${roomId}`;
@@ -81,18 +87,27 @@ export function createBots(count: number, existing: PracticeBot[]): PracticeBot[
   }));
 }
 
+/**
+ * Tops each bot up to stake + buffer. `have` holds balances of bots that were funded
+ * before (e.g. a seating attempt that failed), so their SOL is reused, not stranded.
+ * Returns a transaction with no instructions when every bot already has enough.
+ */
 export function buildBotFundingTx(
   funder: PublicKey,
   bots: PracticeBot[],
-  entryFeeLamports: bigint
+  entryFeeLamports: bigint,
+  have: Map<string, bigint> = new Map()
 ): Transaction {
+  const target = entryFeeLamports + BOT_FUND_BUFFER_LAMPORTS;
   const tx = new Transaction();
   for (const b of bots) {
+    const current = have.get(b.wallet.publicKey.toBase58()) ?? 0n;
+    if (current >= target) continue;
     tx.add(
       SystemProgram.transfer({
         fromPubkey: funder,
         toPubkey: b.wallet.publicKey,
-        lamports: Number(entryFeeLamports + BOT_FUND_BUFFER_LAMPORTS),
+        lamports: Number(target - current),
       })
     );
   }

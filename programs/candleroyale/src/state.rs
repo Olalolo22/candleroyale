@@ -1,6 +1,10 @@
 use anchor_lang::prelude::*;
 
-use crate::constants::{ARENA_LEVERAGE, MAX_PLAYERS, PNL_SCALE, POS_FLAT, POS_LONG, POS_SHORT};
+use ephemeral_rollups_sdk::access_control::structs::EphemeralPermission;
+
+use crate::constants::{
+    ARENA_LEVERAGE, MAX_PLAYERS, PNL_SCALE, POS_FLAT, POS_LONG, POS_SHORT, SEAT_PERMISSION_MEMBERS,
+};
 use crate::errors::CandleRoyaleError;
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -109,6 +113,46 @@ impl Arena {
         + 1                                              // winner_mask
         + (PlayerSeat::SIZE * MAX_PLAYERS)               // players[6] = 558
         + 1;                                             // bump
+}
+
+/// Private per-seat position ("the dark pit"). Delegated to the MagicBlock Private ER (TEE)
+/// at join time and sealed by an ephemeral permission on the player's first trade, so only
+/// the player's wallet and session key can read it while the round runs. Banked PnL and tap
+/// counts stay public in `Arena.players`; at settlement every open position is revealed into
+/// `Arena.players[i].position / entry_price` and closed into `realized_pnl`.
+#[account]
+pub struct SeatPosition {
+    pub room_id: u64,
+    pub seat_index: u8,
+    pub wallet: Pubkey,
+    pub session_key: Pubkey,
+    /// -1 = SHORT, 0 = FLAT, 1 = LONG
+    pub position: i8,
+    /// Oracle price (1e8 scaled) when the current position was opened.
+    pub entry_price: i64,
+    /// True once the ephemeral permission has been created (private) on the TEE ER.
+    pub sealed: bool,
+    pub bump: u8,
+}
+
+impl SeatPosition {
+    pub const SPACE: usize = 8  // discriminator
+        + 8                     // room_id
+        + 1                     // seat_index
+        + 32                    // wallet
+        + 32                    // session_key
+        + 1                     // position
+        + 8                     // entry_price
+        + 1                     // sealed
+        + 1;                    // bump
+}
+
+/// Lamports a seat must carry onto the TEE ER to pay for its own ephemeral permission
+/// (the seat PDA is the payer of `CreateEphemeralPermissionCpi` on its first trade).
+pub fn seat_permission_rent() -> u64 {
+    ephemeral_rollups_sdk::ephemeral_accounts::rent(
+        EphemeralPermission::size_of(SEAT_PERMISSION_MEMBERS) as u32,
+    )
 }
 
 /// Computes leveraged mark-to-market PnL delta in 1e-6 units (10_000 = +1.00%).

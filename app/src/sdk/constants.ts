@@ -24,7 +24,23 @@ export const SOLANA_L1_RPC =
 export const SOLANA_L1_WS =
   process.env.NEXT_PUBLIC_SOLANA_WS || "wss://api.devnet.solana.com";
 
-// Pinned MagicBlock US Devnet ER validator (enforced on-chain in start_and_delegate)
+// Dark pit: rooms and sealed seats run on MagicBlock's Private Ephemeral Rollup (Intel TDX TEE).
+// Every request to it needs an auth token (see lib/tee.ts). Pinned on-chain in
+// start_and_delegate / delegate_seat.
+export const TEE_RPC_URL = (
+  process.env.NEXT_PUBLIC_TEE_RPC || "https://devnet-tee.magicblock.app"
+).replace(/\/$/, "");
+export const TEE_VALIDATOR_PUBKEY = new PublicKey(
+  "MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo"
+);
+export const PERMISSION_PROGRAM_ID = new PublicKey(
+  "ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1"
+);
+export const EPHEMERAL_VAULT_ID = new PublicKey(
+  "MagicVau1t999999999999999999999999999999999"
+);
+
+// Public MagicBlock US Devnet ER: still used to stream prices to the UI (same Pyth Lazer feeds)
 export const ER_VALIDATORS = {
   us: {
     label: "US Devnet ER",
@@ -82,6 +98,8 @@ export function marketFromFeed(feed: PublicKey): MarketFeed {
 
 export const VAULT_SEED = new TextEncoder().encode("vault");
 export const ARENA_SEED = new TextEncoder().encode("arena");
+export const SEAT_SEED = new TextEncoder().encode("seat");
+export const PERMISSION_SEED = new TextEncoder().encode("permission:");
 export const DELEGATE_BUFFER_TAG = new TextEncoder().encode("buffer");
 export const DELEGATION_RECORD_TAG = new TextEncoder().encode("delegation");
 export const DELEGATION_METADATA_TAG = new TextEncoder().encode(
@@ -90,6 +108,7 @@ export const DELEGATION_METADATA_TAG = new TextEncoder().encode(
 
 export const VAULT_ACCOUNT_SIZE = 68;
 export const ARENA_ACCOUNT_SIZE = 700;
+export const SEAT_ACCOUNT_SIZE = 92;
 export const MAX_PLAYERS = 6;
 export const ARENA_LEVERAGE = 20;
 export const PNL_SCALE = 1_000_000; // 10_000 = +1.00%
