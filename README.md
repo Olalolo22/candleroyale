@@ -1,163 +1,168 @@
 # CandleRoyale
 
-**60-second PvP micro-trading battle royale on Solana & MagicBlock Ephemeral Rollups.**
+**A 60-second trading showdown on Solana. Everyone stakes SOL, trades one live price, and the best score takes the pot. Nobody can see your position until the buzzer.**
 
 <p align="center">
-  <img src="docs/candleroyale-round.gif" width="820" alt="The last 15 seconds of a CandleRoyale round: the player flips Long, Flat and Short on a live BTC chart while three practice bots trade, standings reshuffle, the clock turns red, the room settles itself at zero and the winner card says 'The pot is yours'.">
+  <img src="docs/candleroyale-round.gif" width="820" alt="The end of a CandleRoyale round against three practice bots. The bots show as Sealed while the clock runs down, then at zero every row flips open to show what each player was holding, and the winner card says 'The pot is yours'.">
   <br>
-  <sub>The last 15 seconds of a round against three practice bots. UI capture with scripted price data; live Devnet transaction proofs are below.</sub>
+  <sub>The end of a round against three practice bots: sealed positions, the buzzer reveal, the payout. Recorded from the real interface with scripted prices.</sub>
 </p>
 
-2–6 players escrow real SOL into a Solana L1 vault, delegate the battleground into a **MagicBlock Ephemeral Rollup**, and race for 60 seconds flipping **20× LONG / FLAT / SHORT** against live **Pyth Lazer** feeds with **zero gas** and **zero wallet popups** via scoped in-browser Session Keys. When the clock hits zero, MagicBlock commits and undelegates the verified winner back to Solana L1 to unlock the entire pot.
+Try it on Devnet: **[candleroyale.vercel.app](https://candleroyale.vercel.app)**
 
-Built for **MagicBlock Solana Blitz v10 — Theme: Entertainment Finance**.
-
----
-
-## Why MagicBlock Is Load-Bearing
-
-A 60-second tap-trading battle is impossible on base Solana L1:
-
-| Requirement | Base Solana L1 | CandleRoyale on MagicBlock |
-|---|---|---|
-| Rapid position flips (`LONG / FLAT / SHORT`) | ~400ms slots + fee every tap | **Sub-50ms ER execution, 0 gas** |
-| Wallet UX during 60s sprint | Phantom popup every click | **Scoped Session Key** bound once at `join_room` |
-| Price feed freshness | ~400ms base updates | **Live Pyth Lazer on ER** (~50–200ms ticks) |
-| Funds security | Single-layer | **L1 Vault PDA never delegated**; only `Arena` PDA enters ER |
-
-Remove MagicBlock Ephemeral Rollups, Session Keys, or the ER Pyth Lazer feed and the product breaks.
+Built for **MagicBlock Solana Blitz v10, Entertainment Finance**.
 
 ---
 
-## The Dark Pit: Sealed Positions on MagicBlock's Private Rollup
+## What it is
 
-In a normal pit you can watch the leader and copy them. Here you can't.
+Two to six players each put the same amount of SOL into a pot. For 60 seconds, everyone trades one live price (SOL, BTC or ETH) at 20× leverage. You can go long, short or flat as often as you like. When the clock hits zero, whoever is furthest ahead takes the whole pot.
 
-- **Every player gets a private seat account.** It is created when you join and handed to MagicBlock's Private Ephemeral Rollup (an Intel TDX enclave) in the same transaction.
-- **Your first trade seals it.** Inside that same `tap`, the program creates a MagicBlock permission whose only members are your wallet and your in-browser session key. From then on only you can read your position, and the rollup hides your transactions from everyone else.
-- **The scoreboard stays public.** It shows each player's banked score (closed trades) and trade count. Nobody sees which way anyone is pointed while the clock runs.
-- **The buzzer reveals everything.** `finish_round` reads every sealed seat, closes each position at the closing price, writes the position held at the buzzer onto the public scoreboard, and commits the scoreboard and all seats back to Solana together.
+You approve once with your wallet to join. After that, every trade is instant, free, and needs no wallet popups.
 
-Honest limits: a banked score that changes when someone flips hints at the side they just closed, and the trade count is public. Open positions, entry prices and live P&L stay hidden.
+## How a round works
 
-## Architecture
+1. **Stake.** Everyone's SOL goes into a vault on Solana. It stays there the whole round.
+2. **Trade.** Flip long, short or flat on the live price. Each trade is measured from the price you entered at, and when you switch, the result of your old trade is locked into your score.
+3. **The buzzer.** At zero, every open trade closes at the live price and every position is revealed.
+4. **Payout.** The best score takes the pot straight to their wallet. Ties split it equally.
+
+No one to play with? Add practice bots. Each one is a real player with its own wallet and its own stake in the pot, and they hand their SOL back to you after the round.
+
+## Why positions are sealed
+
+If everyone can see everyone's position, the game breaks near the end. Say you're ahead with 15 seconds left. You can just copy whatever the person chasing you does: they go long, you go long; they flip short, you flip short. Whatever the price does, you both move together, so your lead is frozen and you win without reading the market at all.
+
+So in CandleRoyale, **your position is sealed until the buzzer**:
+
+- **Hidden while the clock runs:** which way each player is pointed, the price they got in at, and how much their open trade is up or down.
+- **Public the whole time:** who's playing, the pot, each player's banked score (from trades they've already closed) and how many trades they've made. That's what spectators and invite link previews show.
+- **Revealed at the buzzer:** what everyone was holding, right before the winner is announced.
+
+Nobody can freeze the game by copying. You have to out-trade the market right up to the end.
+
+One honest limit: when someone closes a trade, their banked score jumps, and the size of that jump hints at which way they were pointed. Their *current* trade still stays hidden.
+
+## How MagicBlock makes it work
+
+- **Free, instant trades with no popups.** The room moves onto MagicBlock's rollup for the round, a fast lane next to Solana where trades cost nothing. Your browser holds a temporary key for that room, so you don't approve every tap.
+- **Sealed positions.** It's MagicBlock's private rollup, which runs inside a secure enclave. Your first trade locks your seat so only you can read it, and the rollup hides your trades from everyone else.
+- **Live prices inside the rollup.** Pyth prices update right where the trades happen, so every trade uses a fresh price.
+- **Your money never leaves Solana.** Only the scoreboard and the sealed seats go to the rollup. At the buzzer they come back to Solana together, and the vault pays the winner there, where anyone can check it.
+
+## Keeping the money safe
+
+- **No timing the close.** Settlement only uses a live price taken within 3 seconds of the buzzer. After that, positions close at the last traded price, so nobody can wait for a better moment.
+- **Fresh prices only.** Any price older than 10 seconds is rejected.
+- **Only the room creator can start a round**, and only on MagicBlock's private rollup. A room can't start until every player's seat has been sealed in.
+- **Nothing gets stuck.** If a room is never started, or nobody trades after it starts, any player can cancel it and everyone gets their stake back.
+- **Fair payouts.** Tied winners split the pot equally, and each seat can only claim once.
+- **No spam.** Each player's temporary key is unique, and "trades" that don't change your position are rejected.
+
+---
+
+## For developers
+
+<details>
+<summary><strong>Addresses</strong></summary>
+
+| What | Address |
+|---|---|
+| Program (Devnet) | `72pppjfTWKZ9GQARXtt2dkB4t8VNDaL5gA84MajAUXFS` |
+| MagicBlock private rollup | `https://devnet-tee.magicblock.app` (needs a sign-in token) |
+| Private rollup validator | `MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo` |
+| MagicBlock delegation program | `DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh` |
+| MagicBlock permission program | `ACLseoPoyC3cBqoUtkbjZ4aDrkurZW86v19pXz2XQnp1` |
+| Pyth Lazer oracle program | `PriCems5tHihc6UDXDjzjeawomAwBduWMGAi8ZUjppd` |
+| SOL/USD feed | `ENYwebBThHzmzwPLAQvCucUTsjyfBSZdD9ViXksS4jPu` |
+| BTC/USD feed | `71wtTRDY8Gxgw56bXFt2oc6qeAbTxzStdNiC425Z51sr` |
+| ETH/USD feed | `5vaYr1hpv8yrSpu8w3K95x22byYxUJCCNCSYJtqVWPvG` |
+
+</details>
+
+<details>
+<summary><strong>How the pieces fit</strong></summary>
 
 ```mermaid
 flowchart LR
-    subgraph L1["Solana Devnet (L1 Custody & Settlement)"]
-        V["Vault PDA\n(NEVER Delegated · Holds SOL Pot)"]
-        A1["Arena PDA\n(Lobby → Delegated → Finished)"]
-        W["Winner Main Wallet"]
+    subgraph L1["Solana Devnet"]
+        V["Vault\n(holds the pot, never leaves Solana)"]
+        A1["Room scoreboard"]
+        S1["Each player's sealed seat"]
+        W["Winner's wallet"]
     end
 
-    subgraph ER["MagicBlock US Devnet ER (devnet-us.magicblock.app)"]
-        A2["Delegated Arena PDA\n(10–50ms · 0 Gas)"]
-        PYTH["Pyth Lazer Oracle\nSOL / BTC / ETH"]
-        SK["Scoped Session Keys\n(0 Wallet Popups)"]
+    subgraph ER["MagicBlock private rollup"]
+        A2["Room scoreboard\n(banked scores, public)"]
+        S2["Sealed seats\n(positions, owner only)"]
+        PYTH["Pyth Lazer prices"]
     end
 
-    A1 -->|"1. create_room / join_room\n(SOL → Vault)"| V
-    A1 -->|"2. start_and_delegate"| A2
-    SK -->|"3. begin_round & tap(LONG/FLAT/SHORT)"| A2
-    PYTH -->|"Live 20× Mark-to-Market"| A2
-    A2 -->|"4. finish_round\n(commit_and_undelegate)"| A1
-    A1 -->|"5. claim_payout"| W
-    V -->|"Release SOL Pot"| W
+    S1 -->|"1. join: stake goes to the vault,\nseat moves to the rollup"| S2
+    A1 -->|"2. start the room"| A2
+    PYTH --> S2
+    S2 -->|"3. trades"| A2
+    A2 -->|"4. buzzer: reveal and\nreturn to Solana"| A1
+    S2 --> S1
+    A1 -->|"5. claim"| W
+    V -->|"pot"| W
 ```
 
----
+</details>
 
-## On-Chain Endpoints & Program
+<details>
+<summary><strong>Program instructions</strong></summary>
 
-| Resource | Value |
-|---|---|
-| **Program ID (Devnet)** | `72pppjfTWKZ9GQARXtt2dkB4t8VNDaL5gA84MajAUXFS` |
-| **MagicBlock ER RPC** | `https://devnet-us.magicblock.app` |
-| **ER Validator (US Devnet)** | `MUS3hc9TCw4cGC12vHNoYcCGzJG1txjgQLZWVoeNHNd` |
-| **Delegation Program** | `DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh` |
-| **Pyth Lazer Oracle Program** | `PriCems5tHihc6UDXDjzjeawomAwBduWMGAi8ZUjppd` |
-| **SOL/USD ER Feed** | `ENYwebBThHzmzwPLAQvCucUTsjyfBSZdD9ViXksS4jPu` |
-| **BTC/USD ER Feed** | `71wtTRDY8Gxgw56bXFt2oc6qeAbTxzStdNiC425Z51sr` |
-| **ETH/USD ER Feed** | `5vaYr1hpv8yrSpu8w3K95x22byYxUJCCNCSYJtqVWPvG` |
-
----
-
-## Verified Live On-Chain Proof (Solana Devnet ↔ MagicBlock ER)
-
-Every step of a real 2-player SOL match — plus 6 live negative security assertions — was executed end-to-end via `npm run e2e:devnet` on Solana Devnet and MagicBlock US Devnet ER (`devnet-us.magicblock.app`):
-
-| Step | Layer | Signer | Proof / Latency |
+| Instruction | Where | Who signs | What it does |
 |---|---|---|---|
-| **Program Deploy (Hardened)** | Solana L1 | Authority | [`2HgxE6Tf...H1z3que`](https://explorer.solana.com/tx/2HgxE6Tf7emy8NhXzi91vqnbWvajq9uKYsnqP46Ydv2j5U98fHw5r8UzWLSXpLdBut6PXCFVmPQ6aBiaAH1z3que?cluster=devnet) (`72pppjfTWKZ9GQARXtt2dkB4t8VNDaL5gA84MajAUXFS`, `450 KiB` max len) |
-| **`create_room`** (0.01 SOL) | Solana L1 | Player A | [`2365ZbSz...NY71FoX`](https://explorer.solana.com/tx/2365ZbSzhme4zr6io5JKGq7RoHBGMrWepAb4has4rR4fa55Q511Sma9zbd1Sy2mK262BcDHP2XNFGmUCSNY71FoX?cluster=devnet) |
-| **`join_room`** (0.01 SOL) | Solana L1 | Player B | [`3pNPDqBt...z3KoSsc8`](https://explorer.solana.com/tx/3pNPDqBtyJ3vUeBHue8wasE5Q5ymrYeWh1JbZyQb9VspcTowRVHRNee4JN9TY7LQSHRab3iHgHkj4kBoz3KoSsc8?cluster=devnet) (pot = 0.02 SOL) |
-| **`start_and_delegate`** | Solana L1 → ER | Creator (Player A) | [`4QME4gbx...ZSqeUYJ5`](https://explorer.solana.com/tx/4QME4gbx2iZ9rVVxScyaNTMt1Pg2Xp23vKGHD5YsRsRFFHFhSdwzAJfLT3RQRAj7Hq3ueB3SgUjGxrSJZSqeUYJ5?cluster=devnet) (`owner == DELeGGv...`, pinned validator verified) |
-| **`begin_round`** | MagicBlock ER | 0-SOL Session Key A | `69ms` · 0 gas · `5oMh7HvdrsHLTDvTHaizuFbTSRCVQCd4cecZMuDbbgaigxJcnAd77VMrKWU3YRBbhQjsKHfuQHcR3rVgAvvJD357` |
-| **5× `tap(LONG/SHORT/FLAT)`** | MagicBlock ER | 0-SOL Session Keys A & B | `66–125ms` HTTP RTT · 0 gas · Live Pyth Lazer SOL/USD (`$70.3596 → $70.3708`, `<= 10s` freshness) |
-| **`finish_round`** (`commit_and_undelegate`) | MagicBlock ER → L1 | 0-SOL Session Key A | `130ms` · 0 gas · `2n9HQycdrs89R7qKmS8VpZGABTkaDKvRoPTSaSjDwqUbyPhJewvBLhaudQ9XaGx3M8Lph9Fqh6x4XDLjUhREB1ms` |
-| **`claim_payout(seat=1)`** (`+0.02000 SOL`) | Solana L1 | Permissionless → Seat 1 | [`467UsYf8...QviH4b79`](https://explorer.solana.com/tx/467UsYf87YduwJcr5ZNY3pPxZE44u3HirnrmoWrc1mvJCikQyGM8166YhS6dYRRVRSh77YakxB84aaRAQviH4b79?cluster=devnet) (Winner Seat 1, `winnerMask=0b10`) |
-| **Live Security Rejections** | L1 + ER | Automated Negative Suite | All 6 rejected on-chain: colliding session key, rogue ER validator, non-creator delegate, premature `abort_stale_room`, `FLAT -> FLAT` no-op tap, duplicate `claim_payout` |
-| **Verified Room PDAs** | Solana L1 | — | [Vault PDA (`62iM6M...`)](https://explorer.solana.com/address/62iM6M3XF8nqKhY7aMzbTH6FHBWNG1eN6QEDefzAR76?cluster=devnet) · [Arena PDA (`9KebNx...`)](https://explorer.solana.com/address/9KebNxQ7ProwjQE4z55Jjm2KtzFtWLEeazvzKJ5zPhRQ?cluster=devnet) |
+| `create_room` | Solana | Creator | Makes the vault, the scoreboard and the creator's seat, and stakes the creator's SOL |
+| `join_room` | Solana | Player | Stakes into the vault and makes the player's seat (must be the next free one) |
+| `delegate_seat` | Solana | Player | Moves the player's seat to the private rollup (sent together with create or join) |
+| `cancel_room` | Solana | Creator | Refunds a creator whose room nobody joined |
+| `abort_stale_lobby` | Solana | Any seated player | Unlocks refunds for a room that was never started (after 15 minutes) |
+| `start_and_delegate` | Solana | Creator | Checks every seat is on the private rollup, then moves the scoreboard there |
+| `begin_round` | Rollup | Player or temp key | Locks the opening price and starts the clock |
+| `tap` | Rollup | Player or temp key | Changes position. Writes it only to the player's sealed seat, banks the old trade on the public scoreboard, and seals the seat on the first trade |
+| `finish_round` | Rollup | Anyone | Reads every sealed seat, closes and reveals each position, picks the winner, and sends the scoreboard and seats back to Solana |
+| `abort_stale_room` | Rollup | Anyone | Sends an idle started room back to Solana for refunds (after 3 minutes) |
+| `claim_payout` | Solana | Anyone | Pays a winner, splits a tie, or refunds a cancelled room, one seat at a time |
 
----
+</details>
 
-## Security Hardening
+<details>
+<summary><strong>Run it yourself</strong></summary>
 
-All game-logic and liveness invariants enforced on-chain (verified by 8 Rust unit tests and 6 live negative assertions in `npm run e2e:devnet`):
-
-1. **No Settlement-Timing Free Option:** `finish_round` only accepts a live oracle close within a `3s` grace window (`now <= ends_at + 3` and `publish_time <= ends_at + 3`). After grace expires, open positions close deterministically at `arena.last_price`, eliminating timing-bot advantages.
-2. **Pinned ER Validator + Creator Start Control:** `start_and_delegate` verifies `payer == arena.creator`, resets `arena.created_at` at delegation time, and rejects any `remaining_accounts[0]` other than the hardcoded `PINNED_ER_VALIDATOR` (`MUS3hc9TCw4cGC12vHNoYcCGzJG1txjgQLZWVoeNHNd`).
-3. **No Permanently Stuck Lobby or Delegated Funds:** If a joined L1 `Lobby` is never started within `900s` (`L1_LOBBY_TIMEOUT_SECS`), any seated player can call `abort_stale_lobby` on L1 to unlock per-seat refunds via `claim_payout`. If a delegated `Lobby` never starts trading within `180s` (`STALE_LOBBY_TIMEOUT_SECS`), anyone can call `abort_stale_room` on ER to mark `ArenaStatus::Aborted`, `commit_and_undelegate` back to L1, and unlock per-seat entry-fee refunds via `claim_payout`. If a player loses their `sessionStorage` key across tabs, the frontend transparently falls back to direct wallet signing on ER.
-4. **Tight Oracle Freshness (`10s`):** `MAX_ORACLE_AGE_SECS` is enforced at `10` seconds (down from 300s) against live ~0–1s Pyth Lazer ticks, preventing stale-feed frontrunning at 20× leverage.
-5. **Fair Tie Splitting & No-Op Spam Protection:** `tap` rejects same-direction no-ops (`NoOpPositionChange`), and `finish_round` records a `winner_mask` bitmask across all seats tied at `best_pnl` so `claim_payout` splits the escrowed pot equally across tied winners.
-6. **Session Key Isolation:** `create_room` and `join_room` reject `Pubkey::default()` and enforce strict uniqueness across all seated wallets and session keys (`SessionKeyCollision`); `tap` matches `session_key` before `wallet`.
-
----
-
-## Program Instructions
-
-| Instruction | Layer | Signer | Purpose |
-|---|---|---|---|
-| `create_room` | Solana L1 | Creator Wallet | Initializes `Vault` (68B) + `Arena` (700B) PDAs, escrows creator's SOL, binds Seat 0 `session_key` |
-| `join_room` | Solana L1 | Joiner Wallet | Escrows entry SOL into `Vault` PDA, enforces disjoint `session_key` binding |
-| `cancel_room` | Solana L1 | Creator Wallet | Refunds solo creator on L1 if nobody else joined |
-| `abort_stale_lobby` | Solana L1 | Any Seated Player | Escape hatch after 900s unstarted joined L1 `Lobby`; marks `Aborted` to unlock per-seat L1 refunds |
-| `start_and_delegate` | Solana L1 | Creator Wallet | Verifies creator + hardcoded `PINNED_ER_VALIDATOR`, resets delegation clock, and delegates `Arena` PDA to MagicBlock ER |
-| `begin_round` | MagicBlock ER | Session Key / Player | Locks live Pyth Lazer opening price (`<= 10s` age) & starts countdown (0 gas) |
-| `tap` | MagicBlock ER | Session Key / Player | Rejects no-ops, marks previous position to market at 20× leverage & flips `LONG / FLAT / SHORT` (0 gas, 0 popups) |
-| `finish_round` | MagicBlock ER | Permissionless | Closes open positions (live oracle within 3s grace, deterministic `last_price` after), computes `winner_mask`, calls `commit_and_undelegate` |
-| `abort_stale_room` | MagicBlock ER | Permissionless | Escape hatch after 180s idle delegated `Lobby`; marks `Aborted` and calls `commit_and_undelegate` to unlock L1 refunds |
-| `claim_payout` | Solana L1 | Permissionless | Per-seat (`seat_index`) L1 Vault payout for single winner, equal multi-way tie split, or `Aborted` entry-fee refund (`claimed_mask` guards against double claims) |
-
----
-
-## Quickstart
-
-### 1. Build & Test the On-Chain Program
 ```bash
-cargo test --manifest-path programs/candleroyale/Cargo.toml
-cargo-build-sbf --manifest-path programs/candleroyale/Cargo.toml --sbf-out-dir target/deploy
-```
+# Program: test, build, deploy (upgrades the same program ID)
+cargo test
+anchor build
+anchor deploy --provider.cluster devnet
 
-### 2. Deploy to Solana Devnet & Run Live L1 ↔ ER E2E Verification
-```bash
-# Ensure deployer wallet has ~3.5 Devnet SOL
-solana program deploy target/deploy/candleroyale.so \
-  --program-id target/deploy/candleroyale-keypair.json \
-  --url https://api.devnet.solana.com
-
-# Verify codec + live Pyth Lazer ER feeds
+# Checks against Devnet
 npm install
 npm run test:codec
-
-# Run full 2-player Devnet + MagicBlock ER lifecycle test
 npm run e2e:devnet
-```
 
-### 3. Run the Web Arena
-```bash
+# Web app
 cd app
 npm install
 npm run dev
 ```
-Open `http://localhost:3000`. Use **Phantom** in Window 1 and **Solflare** (or the built-in **Devnet Burner Keypair**) in Window 2 for live 2-tab PvP on Devnet.
+
+Open `http://localhost:3000` with a wallet on Devnet. Use a second browser or the built-in Devnet burner wallet to play yourself, or add practice bots.
+
+</details>
+
+<details>
+<summary><strong>Earlier Devnet proof (before sealed positions)</strong></summary>
+
+A full two-player round, plus six attempts to break the rules that the program rejected, run end to end on Devnet against MagicBlock's public rollup before the private version:
+
+- Create room: [`2365ZbSz…`](https://explorer.solana.com/tx/2365ZbSzhme4zr6io5JKGq7RoHBGMrWepAb4has4rR4fa55Q511Sma9zbd1Sy2mK262BcDHP2XNFGmUCSNY71FoX?cluster=devnet)
+- Join: [`3pNPDqBt…`](https://explorer.solana.com/tx/3pNPDqBtyJ3vUeBHue8wasE5Q5ymrYeWh1JbZyQb9VspcTowRVHRNee4JN9TY7LQSHRab3iHgHkj4kBoz3KoSsc8?cluster=devnet)
+- Start on the rollup: [`4QME4gbx…`](https://explorer.solana.com/tx/4QME4gbx2iZ9rVVxScyaNTMt1Pg2Xp23vKGHD5YsRsRFFHFhSdwzAJfLT3RQRAj7Hq3ueB3SgUjGxrSJZSqeUYJ5?cluster=devnet)
+- Five trades and the settlement on the rollup, no gas
+- Payout to the winner: [`467UsYf8…`](https://explorer.solana.com/tx/467UsYf87YduwJcr5ZNY3pPxZE44u3HirnrmoWrc1mvJCikQyGM8166YhS6dYRRVRSh77YakxB84aaRAQviH4b79?cluster=devnet)
+- Rejected as expected: a reused temporary key, starting on a rollup other than the pinned one, a non-creator starting the room, an early abort, a trade that changed nothing, and a double claim
+
+</details>
