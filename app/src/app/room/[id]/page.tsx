@@ -996,11 +996,31 @@ export default function RoomPage() {
       });
       await syncState();
     } catch (err: unknown) {
-      setBanner({
-        kind: "error",
-        text:
-          err instanceof Error ? err.message : "Couldn't pay out. Try again.",
-      });
+      // Someone else (often the winner, from their own screen) may have paid this seat first.
+      // The program refuses a second payment, so say that plainly instead of a raw error.
+      let alreadyPaid = false;
+      try {
+        const info = await l1Conn.getAccountInfo(vaultPda, "confirmed");
+        const v = info ? decodeVault(info.data) : null;
+        alreadyPaid = !!v && (v.claimedMask & (1 << seatIndex)) !== 0;
+      } catch {
+        // fall through to the original error
+      }
+      if (alreadyPaid) {
+        setBanner({
+          kind: "success",
+          text: isRefund
+            ? `${badgeFor(targetSeat.wallet)} was already refunded. Nothing more to send.`
+            : `${badgeFor(targetSeat.wallet)} was already paid. Nothing more to send.`,
+        });
+        await syncState();
+      } else {
+        setBanner({
+          kind: "error",
+          text:
+            err instanceof Error ? err.message : "Couldn't pay out. Try again.",
+        });
+      }
     } finally {
       setBusyAction(null);
     }
