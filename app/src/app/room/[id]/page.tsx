@@ -1436,8 +1436,8 @@ export default function RoomPage() {
         title = "Take a seat";
         body =
           entrySol > 0
-            ? `Stake ${fmtSol(entrySol)} SOL to join. You approve once; your trades after that need no popups and no gas.`
-            : "This room is free. You approve once to join; your trades after that need no popups.";
+            ? `Stake ${fmtSol(entrySol)} SOL to join. You approve once; your trades after that need no popups and no gas, and stay hidden from other players until the buzzer.`
+            : "This room is free. You approve once to join; your trades after that need no popups and stay hidden until the buzzer.";
         actions = (
           <button
             type="button"
@@ -1485,7 +1485,7 @@ export default function RoomPage() {
         body =
           seatsOpen > 0 && arena.maxPlayers > 1
             ? `${seatsOpen} ${seatsOpen === 1 ? "seat is" : "seats are"} open. Send the invite link, or fill seats with practice bots. Starting locks the seats.`
-            : "Start the room to move the scoreboard onto MagicBlock's rollup, where every trade is instant and free.";
+            : "Start the room to move it onto MagicBlock's private rollup. Trades there are instant and free, and each position stays sealed until the buzzer.";
         actions = (
           <>
             {seatsOpen > 0 && arena.maxPlayers > 1 && (
@@ -1552,11 +1552,11 @@ export default function RoomPage() {
         body =
           phase === 1
             ? `The clock starts on the first trade. If nobody starts in ${staleCountdownSec}s, refunds unlock automatically.`
-            : "Scores update live. Open your own room from the lobby to play.";
+            : "Banked scores update live. Open positions stay sealed until the buzzer.";
       } else if (phase === 1) {
         title = activeSessionKey ? "Ready when you are" : "Ready — wallet fallback mode";
         body = activeSessionKey
-          ? `Your first trade starts the clock for everyone, or start it now. Stale refund escape unlocks in ${staleCountdownSec}s if nobody trades.`
+          ? `Your first trade seals your seat and starts the clock for everyone, or start it now. Refunds unlock in ${staleCountdownSec}s if nobody trades.`
           : "This tab doesn't hold your zero-popup key, so trades will ask your wallet to approve (still zero gas).";
         actions = (
           <button
@@ -1687,7 +1687,7 @@ export default function RoomPage() {
                 ? `${winnerSeats.map((w) => badgeFor(w.seat.wallet)).join(" & ")} split the ${fmtSol(potSol)} SOL pot.`
                 : `${winnerSeats.map((w) => badgeFor(w.seat.wallet)).join(" & ")} tied at the top in a free round.`
               : potSol > 0
-                ? `${badgeFor(primaryWinner.seat.wallet)} took the ${fmtSol(potSol)} SOL pot.`
+                ? `${badgeFor(primaryWinner.seat.wallet)} took the ${fmtSol(potSol)} SOL pot. Positions were sealed until the buzzer. The standings show what everyone held.`
                 : `${badgeFor(primaryWinner.seat.wallet)} topped the board in a free round.`
             : "This round is over.";
       actions = (

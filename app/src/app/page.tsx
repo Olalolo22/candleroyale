@@ -54,11 +54,11 @@ const ROUND_STEPS = [
   },
   {
     name: "Trade",
-    desc: "Go long, short or flat on a live price, as often as you like. No gas, no popups.",
+    desc: "Go long, short or flat on a live price, as often as you like. No gas, no popups, and nobody sees your position.",
   },
   {
     name: "Settle",
-    desc: "When the clock hits zero, every open position closes at the live price.",
+    desc: "When the clock hits zero, every position is revealed and closed at the live price.",
   },
   {
     name: "Payout",
@@ -270,6 +270,10 @@ export default function LobbyPage() {
             like. Whoever is furthest ahead when the clock runs out{" "}
             <strong>takes everything</strong>.
           </p>
+          <p className="hero-lead">
+            Everyone&apos;s position stays <strong>sealed until the buzzer</strong>, so
+            nobody can copy the leader. You only see banked scores.
+          </p>
 
           <ol className="round-steps" aria-label="How a round works">
             {ROUND_STEPS.map((s, i) => (
@@ -450,9 +454,9 @@ export default function LobbyPage() {
             </button>
 
             <p className="ticket-fine">
-              Stakes stay in a vault on Solana the whole time. Only the scoreboard
-              moves to MagicBlock&apos;s rollup, which is what makes trades instant and
-              free.
+              Stakes stay in a vault on Solana the whole time. Trades run on
+              MagicBlock&apos;s private rollup, a sealed enclave that keeps each position
+              hidden until the buzzer and makes trades instant and free.
             </p>
           </div>
         </aside>
