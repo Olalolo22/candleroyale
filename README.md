@@ -36,7 +36,7 @@ If everyone can see everyone's position, the game breaks near the end. Say you'r
 So in CandleRoyale, **your position is sealed until the buzzer**:
 
 - **Hidden while the clock runs:** which way each player is pointed, the price they got in at, and how much their open trade is up or down.
-- **Public the whole time:** who's playing, the pot, each player's banked score (from trades they've already closed) and how many trades they've made. That's what spectators and invite link previews show.
+- **Public the whole time:** who's playing, the pot, each player's banked score (from trades they've already closed) and how many trades they've made. That's what spectators and invite link previews show. Rooms appear on the room list unless the creator picks **Invite link only**, which keeps a room unlisted (still on Solana, so not secret).
 - **Revealed at the buzzer:** what everyone was holding, right before the winner is announced.
 
 Nobody can freeze the game by copying. You have to out-trade the market right up to the end.
