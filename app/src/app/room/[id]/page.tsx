@@ -63,6 +63,7 @@ import {
   jacketColor,
   pnlClass,
   posClass,
+  isLinkOnlyRoom,
   posLabel,
   shortKey,
 } from "@/lib/pit";
@@ -1760,6 +1761,11 @@ export default function RoomPage() {
               <h1 className="room-heading">
                 {market.symbol.split("/")[0]} room
                 <small>#{roomIdStr.slice(-6)}</small>
+                {isLinkOnlyRoom(roomIdStr) && (
+                  <span className="room-tag" title="Kept off the room list. Only people with the invite link can find it.">
+                    Link only
+                  </span>
+                )}
               </h1>
             </div>
             <div className="room-bar-right">

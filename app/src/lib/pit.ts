@@ -26,6 +26,21 @@ export function badgeFor(wallet: PublicKey | string): string {
   return (letters + "XXX").slice(0, 3);
 }
 
+/**
+ * Private rooms ("invite link only") get a room number with this bit set, so the room
+ * list can skip them. Nothing on-chain changes: anyone reading Solana directly can still
+ * find the room, it just isn't advertised.
+ */
+export const LINK_ONLY_ROOM_FLAG = 1n << 52n;
+
+export function isLinkOnlyRoom(roomId: bigint | string): boolean {
+  try {
+    return (BigInt(roomId) & LINK_ONLY_ROOM_FLAG) !== 0n;
+  } catch {
+    return false;
+  }
+}
+
 export function shortKey(k: string): string {
   return `${k.slice(0, 4)}…${k.slice(-4)}`;
 }

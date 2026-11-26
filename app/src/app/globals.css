@@ -771,6 +771,28 @@ fieldset {
   color: var(--slate-dim);
 }
 
+.room-tag {
+  padding: 1px 7px;
+  border: 1px solid var(--rail-strong);
+  border-radius: var(--r-chip);
+  font-size: var(--t-xs);
+  color: var(--slate);
+}
+
+.room-heading .room-tag {
+  margin-left: 8px;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  vertical-align: middle;
+}
+
+.field-hint {
+  margin: 8px 0 0;
+  font-size: var(--t-xs);
+  line-height: 1.45;
+  color: var(--slate);
+}
+
 .seat-pips {
   display: inline-flex;
   gap: 3px;
