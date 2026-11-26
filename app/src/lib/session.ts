@@ -53,6 +53,37 @@ export interface ErTxResult {
 
 let cachedErBlockhash: { blockhash: string; fetchedAt: number } | null = null;
 
+// Background refresh: while a round is on, keep a recent blockhash ready so a trade never
+// waits a network round trip for one (about 300ms from Lagos). Stops 30s after last use.
+let warmTimer: ReturnType<typeof setInterval> | null = null;
+let warmConn: Connection | null = null;
+let warmLastUse = 0;
+
+async function refreshErBlockhash(conn: Connection): Promise<void> {
+  try {
+    const latest = await conn.getLatestBlockhash("confirmed");
+    cachedErBlockhash = { blockhash: latest.blockhash, fetchedAt: Date.now() };
+  } catch {
+    // keep the previous one; sendErSessionTx fetches fresh if it gets too old
+  }
+}
+
+/** Keep a fresh rollup blockhash cached while the player is in a live room. */
+export function warmErBlockhash(conn: Connection): void {
+  warmConn = conn;
+  warmLastUse = Date.now();
+  if (warmTimer) return;
+  void refreshErBlockhash(conn);
+  warmTimer = setInterval(() => {
+    if (!warmConn || Date.now() - warmLastUse > 30_000) {
+      if (warmTimer) clearInterval(warmTimer);
+      warmTimer = null;
+      return;
+    }
+    void refreshErBlockhash(warmConn);
+  }, 1000);
+}
+
 /**
  * Signs and sends a gasless MagicBlock Ephemeral Rollup transaction with an ephemeral Session Key.
  * Caches ER blockhash for 3s to eliminate an extra RPC round-trip on rapid-fire taps.
@@ -63,6 +94,7 @@ export async function sendErSessionTx(
   sessionKey: Keypair
 ): Promise<ErTxResult> {
   const t0 = performance.now();
+  warmErBlockhash(erConnection);
   let blockhash: string;
   if (cachedErBlockhash && Date.now() - cachedErBlockhash.fetchedAt < 3000) {
     blockhash = cachedErBlockhash.blockhash;

@@ -39,6 +39,7 @@ import {
   getOrCreateSessionKey,
   loadExistingSessionKey,
   sendErSessionTx,
+  warmErBlockhash,
 } from "@/lib/session";
 import { getTeeConnection, getViewerConnection } from "@/lib/tee";
 import { useOracleStream } from "@/lib/useOracleStream";
@@ -247,7 +248,10 @@ export default function RoomPage() {
       const viewer = await getViewerConnection();
       const erArenaInfo = await viewer.getAccountInfo(arenaPda, "confirmed");
       if (erArenaInfo) {
-        setRawArena(decodeArena(erArenaInfo.data));
+        const a = decodeArena(erArenaInfo.data);
+        setRawArena(a);
+        // Have a blockhash ready before the first trade, so no trade waits for one
+        if (a.status === "Lobby" || a.status === "Live") warmErBlockhash(viewer);
       }
     } catch {
       // ignore transient ER poll blip
