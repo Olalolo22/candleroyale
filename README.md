@@ -39,6 +39,12 @@ So in CandleRoyale, **your position is sealed until the buzzer**:
 - **Public the whole time:** who's playing, the pot, each player's banked score (from trades they've already closed) and how many trades they've made. That's what spectators and invite link previews show. Rooms appear on the room list unless the creator picks **Invite link only**, which keeps a room unlisted (still on Solana, so not secret).
 - **Revealed at the buzzer:** what everyone was holding, right before the winner is announced.
 
+<p align="center">
+  <img src="docs/sealed-closeup.gif" width="460" alt="Close-up of the standings. While the clock runs, your own row shows your position and every bot shows a lock with 'Sealed' and its banked score. At the buzzer the header changes to 'Buzzer. Every position is public now' and each row flips to show what that player was holding.">
+  <br>
+  <sub>What other players see: sealed until the buzzer, then everything flips open.</sub>
+</p>
+
 Nobody can freeze the game by copying. You have to out-trade the market right up to the end.
 
 One honest limit: when someone closes a trade, their banked score jumps, and the size of that jump hints at which way they were pointed. Their *current* trade still stays hidden.
