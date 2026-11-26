@@ -36,6 +36,15 @@ export function useOracleStream(feedAddress: PublicKey) {
 
   useEffect(() => {
     let active = true;
+    // A new market starts a fresh chart. Without this, a room that loads on the default
+    // SOL feed and then switches to BTC or ETH draws one giant candle from ~$70 to the
+    // new price, which squashes the chart until it scrolls off.
+    setLatest(null);
+    setPoints([]);
+    setCandles([]);
+    setConnected(false);
+    setRttMs(null);
+    lastPriceRef.current = 0n;
     const conn = new Connection(ER_RPC_URL, {
       commitment: "confirmed",
       wsEndpoint: ER_WS_URL,
