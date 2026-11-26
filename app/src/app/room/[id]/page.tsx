@@ -1598,8 +1598,10 @@ export default function RoomPage() {
       );
     } else if (phase === 4 && arena.status === "Aborted") {
       title = "Room aborted — refunds ready";
-      body = `Each player gets their ${fmtSol(entrySol)} SOL stake back from the Solana vault.`;
-      actions = (
+      body = connected
+        ? `Each player gets their ${fmtSol(entrySol)} SOL stake back from the Solana vault.`
+        : `Each player's ${fmtSol(entrySol)} SOL stake is waiting in the Solana vault for them to collect.`;
+      actions = !connected ? null : (
         <>
           {unclaimedSeatIndices.map((seatIdx) => {
             const seat = arena.players[seatIdx];
@@ -1632,7 +1634,7 @@ export default function RoomPage() {
           LAMPORTS_PER_SOL;
         title = `${winnerSeats.length}-way tie — pot splits equally`;
         body = `Tied winners each claim ${fmtSol(splitSol)} SOL from the Solana vault.`;
-        actions = (
+        actions = !connected ? null : (
           <>
             {unclaimedSeatIndices.map((seatIdx) => {
               const seat = arena.players[seatIdx];
@@ -1664,8 +1666,10 @@ export default function RoomPage() {
           : `${badgeFor(primaryWinner.seat.wallet)} won`;
         body = iWon
           ? `${fmtSol(potSol)} SOL is waiting in the vault for you.`
-          : `Anyone can send the ${fmtSol(potSol)} SOL pot to the winner's wallet.`;
-        actions = (
+          : connected
+            ? `Anyone can send the ${fmtSol(potSol)} SOL pot to the winner's wallet.`
+            : `The ${fmtSol(potSol)} SOL pot is waiting in the vault for the winner.`;
+        actions = !connected ? null : (
           <button
             type="button"
             id="claim-payout-btn"
@@ -2192,7 +2196,7 @@ export default function RoomPage() {
                     {isTie ? "Tied winners" : "Gasless trades"}
                   </div>
                 </div>
-                {unclaimedSeatIndices.length > 0 && potSol > 0 ? (
+                {unclaimedSeatIndices.length > 0 && potSol > 0 && connected ? (
                   (() => {
                     const targetSeatIdx =
                       myWinningSeatIndex >= 0 &&
