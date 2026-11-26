@@ -1,6 +1,6 @@
 # CandleRoyale demo script
 
-About 90 seconds. Talk like you're showing a friend. Start straight on the live app, with no intro slides.
+About 1 minute 45 seconds. Talk like you're showing a friend. Start straight on the live app, with no intro slides. The round itself is most of the video, so most of your talking happens while you trade.
 
 ## Before you hit record
 
@@ -11,53 +11,65 @@ About 90 seconds. Talk like you're showing a friend. Start straight on the live 
 
 ---
 
-## 1. What it is (0:00–0:10)
+## 1. The pitch (0:00–0:10)
 
-**Do:** Tap **Create room and stake 0.01 SOL** and approve once.
-
-**Say:**
-> "This is CandleRoyale. Everyone puts SOL into a pot, we all trade one live price for 60 seconds, and whoever's furthest ahead at the buzzer takes the whole pot."
-
-## 2. Fill the room (0:10–0:22)
-
-**Do:** Tap **Add 3 practice bots** and approve once. The three bots appear in the standings and the pot reads 0.04 SOL. Tap **Start room**.
+**Do:** Tap **Create room and stake 0.01 SOL** and approve.
 
 **Say:**
-> "No one around to play? These bots are real players. Each one has its own wallet and its own stake in the pot. The money stays in a vault on Solana the whole time. Starting the room moves the game onto MagicBlock, which is what makes every trade instant and free."
+> "This is CandleRoyale, a trading game with a real pot. Everyone puts in SOL, we all trade one live price for 60 seconds, and whoever's furthest ahead at the buzzer takes the lot."
 
-## 3. The twist: nobody can see your hand (0:22–0:35)
+## 2. Fill the room (0:10–0:25)
 
-**Do:** Make your first trade. Point at the line under your score, then at the bots marked **Sealed**.
+**Do:** Tap **Add 3 practice bots** and approve. The bots appear in the standings and the pot reads 0.04 SOL. Tap **Start room** and approve.
 
 **Say:**
-> "Here's the twist. Nobody can see which way anyone is betting. I can see my own position, but the bots just show as sealed, with only the points they've already locked in.
+> "Nobody around to play? These bots are real players, each with its own wallet and its own stake in the pot. The money sits in a vault on Solana the whole time. The game itself moves onto MagicBlock, and that's what makes trading here free and instant."
+
+## 3. The twist (0:25–0:45)
+
+**Do:** Make your first trade. This starts the clock. Point at the line under your score, then at the bots marked **Sealed**.
+
+**Say:**
+> "Here's the twist: nobody can see which way anyone's betting. I can see mine. The bots just show as sealed, with only the points they've already locked in.
 >
-> That matters because if positions were public, whoever's ahead near the end could just copy the person chasing them and freeze the game. Sealed positions mean you have to out-trade the market right up to the end."
+> That's on purpose. If positions were public, whoever's ahead near the end could just copy the person chasing them and freeze the game. Sealed, you have to actually out-trade the market right to the buzzer."
 
-**Optional:** With your window on the left half and the incognito spectator on the right, make a trade. Your row says **Long** on the left and **Sealed** on the right at the same moment.
+**Optional, with the spectator window on the right:** make a trade so your row reads **Long** on the left and **Sealed** on the right.
 
 > "On the right is the same room from someone else's screen. They can't see what I'm holding either."
 
-## 4. The round (0:35–1:05)
+## 4. Play (0:45–1:25)
 
-**Do:** Flip long, short and flat as the candles move. Scroll down to the on-chain log for a second.
+**Do:** Flip long, short and flat as the candles move. Halfway through, scroll down to the on-chain log for a couple of seconds, then back up for the last 15 seconds.
+
+**Say (spread out, between trades):**
+> "Every tap is a real transaction, mine and the bots'. No wallet popups, no fees.
+>
+> It runs on MagicBlock's private rollup, which works inside a secure enclave. That's what keeps everyone's position hidden while the clock runs.
+>
+> And the board keeps reshuffling. You don't know if you're really ahead until the end."
+
+Let the last 10 seconds play out with little talking. The countdown sound and the red clock do the work.
+
+## 5. The buzzer (1:25–1:35)
+
+**Do:** Let the clock hit zero. Every row flips to **…at the buzzer**, then the result card appears.
 
 **Say:**
-> "No wallet popups, no fees. Every tap, mine and the bots', is a real transaction on MagicBlock's private rollup. It runs inside a secure enclave, which is how it keeps everyone's position hidden."
+> "Buzzer. Now everything's revealed: exactly what everyone was holding, and the final scores go back to Solana."
 
-## 5. The buzzer (1:05–1:20)
+## 6. The payout (1:35–1:45)
 
-**Do:** Let the clock run out. Watch every row flip to **…at the buzzer**, then the win card.
+**Do:** If you won, tap **Claim**. If a bot won, tap **Pay out the winner**. Then open the payout link in the on-chain log.
 
-**Say:**
-> "Buzzer. Now everything's revealed. You can see exactly what everyone was holding, and the result goes straight back to Solana."
+**Say, if you won:**
+> "And the pot lands in my wallet. Real SOL, mine to keep, and anyone can check the payout on Solana."
 
-## 6. Get paid (1:20–1:30)
+**Say, if a bot won:**
+> "The bot got me this time, and the pot goes straight to its wallet. Nobody can stop or redirect it, and anyone can check the payout on Solana."
 
-**Do:** Tap **Claim** if you won. Open the payout link in the on-chain log.
-
-**Say:**
-> "The pot pays out from the vault on Solana, and anyone can check it. That's CandleRoyale: a fast trading game where nobody can copy you."
+**Close:**
+> "That's CandleRoyale: trade, compete and win real SOL in 60 seconds. MagicBlock makes it free and instant, and its privacy means nobody can copy you."
 
 **After you stop recording:** tap **Return bot SOL to me** to get the bots' stakes and leftovers back.
 
