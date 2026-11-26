@@ -16,7 +16,9 @@ About 1 minute 45 seconds. Talk like you're showing a friend. Start straight on 
 **Do:** Tap **Create room and stake 0.01 SOL** and approve.
 
 **Say:**
-> "This is CandleRoyale, a trading game with a real pot. Everyone puts in SOL, we all trade one live price for 60 seconds, and whoever's furthest ahead at the buzzer takes the lot."
+> "This is CandleRoyale, a trading game with a real pot. Everyone puts in SOL, we all trade one live price for 60 seconds, and whoever's furthest ahead at the buzzer takes the lot.
+>
+> My wallet only pops up when money goes in or comes out. Trading itself never asks."
 
 ## 2. Fill the room (0:10–0:25)
 
@@ -44,6 +46,8 @@ About 1 minute 45 seconds. Talk like you're showing a friend. Start straight on 
 
 **Say (spread out, between trades):**
 > "Every tap is a real transaction, mine and the bots'. No wallet popups, no fees.
+>
+> That's because when I joined, the app made a temporary key in my browser that's only allowed to trade in this one room. It signs every long, short and flat for me. It holds no money and can't touch my wallet. Each bot has its own key the same way.
 >
 > It runs on MagicBlock's private rollup, which works inside a secure enclave. That's what keeps everyone's position hidden while the clock runs.
 >
